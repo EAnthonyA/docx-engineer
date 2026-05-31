@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: ${DOCKERHUB_USERNAME}/docx-engineer-frontend:latest
+    image: ${DOCKERHUB_USERNAME}/docx-engineer:frontend
     ports:
       - "8080:80"
     restart: unless-stopped
@@ -13,7 +13,7 @@ services:
           cpus: "0.5"
 
   backend:
-    image: ${DOCKERHUB_USERNAME}/docx-engineer-backend:latest
+    image: ${DOCKERHUB_USERNAME}/docx-engineer:backend
     restart: unless-stopped
     volumes:
       - jobs_data:/jobs
@@ -35,14 +35,14 @@ services:
           cpus: "1"
 
   executor:
-    image: ${DOCKERHUB_USERNAME}/docx-engineer-executor:latest
+    image: ${DOCKERHUB_USERNAME}/docx-engineer:executor
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - jobs_data:/jobs
     environment:
       - JOBS_DIR=/jobs
-      - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer-sandbox:latest
+      - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox
       - SANDBOX_TIMEOUT=30
     deploy:
       resources:

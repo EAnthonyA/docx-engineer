@@ -22,7 +22,7 @@ jobs:
           file: executor/Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer-executor:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer-executor:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer:executor
+            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer:executor-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -22,7 +22,7 @@ jobs:
           file: sandbox/Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer-sandbox:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer-sandbox:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer:sandbox
+            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer:sandbox-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -22,7 +22,7 @@ jobs:
           file: frontend/Dockerfile-prod
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer-frontend:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer-frontend:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer:frontend
+            ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer:frontend-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
