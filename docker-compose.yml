@@ -7,11 +7,11 @@ services:
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/index.html:/app/index.html
-      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/vite.config.mts:/app/vite.config.mts
     ports:
       - "3000:3000"
     environment:
-      - VITE_BACKEND_URL=http://localhost:8000
+      - VITE_BACKEND_URL=http://backend:8000
     depends_on:
       - backend
 
