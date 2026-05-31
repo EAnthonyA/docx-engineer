@@ -84,10 +84,10 @@ def _job_resp(job: Job) -> dict:
 
 @app.post("/api/jobs")
 async def create_new_job(
-    file: UploadFile = File(...),
-    instruction: str = Form(...),
     background_tasks: BackgroundTasks,
     _: bool = Depends(verify_session),
+    file: UploadFile = File(...),
+    instruction: str = Form(...),
 ):
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(400, "Only .docx files accepted")
