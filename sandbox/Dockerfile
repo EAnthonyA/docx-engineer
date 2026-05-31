@@ -1,8 +1,7 @@
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir "python-docx==1.1.2"
-
-RUN adduser --disabled-password --no-create-home appuser
+RUN pip install --no-cache-dir "python-docx==1.1.2" \
+    && adduser --disabled-password --no-create-home appuser
 
 WORKDIR /work
 

@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 RUN pip install --no-cache-dir \
     "fastapi==0.115.0" \
-    "uvicorn[standard]==0.32.0" \
+    "uvicorn==0.32.0" \
     "docker==7.1.0" \
     "pydantic==2.9.2"
 
