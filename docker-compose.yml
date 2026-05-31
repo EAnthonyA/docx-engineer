@@ -1,0 +1,56 @@
+services:
+  frontend:
+    image: ${USER}-docx-engineer-frontend
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_BACKEND_URL=http://localhost:8000
+    depends_on:
+      - backend
+
+  backend:
+    image: ${USER}-docx-engineer-backend
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - jobs_data:/jobs
+    environment:
+      - JOBS_DIR=/jobs
+      - EXECUTOR_URL=http://executor:8001
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - SESSION_SECRET=${SESSION_SECRET:-dev-secret-change-me}
+      - CORS_ORIGINS=http://localhost:3000
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-lite}
+    depends_on:
+      - executor
+
+  executor:
+    image: ${USER}-docx-engineer-executor
+    build:
+      context: executor
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - jobs_data:/jobs
+    environment:
+      - JOBS_DIR=/jobs
+      - SANDBOX_IMAGE=docx-sandbox
+      - SANDBOX_TIMEOUT=30
+
+volumes:
+  jobs_data:
+    name: ${USER}-docx-engineer-jobs

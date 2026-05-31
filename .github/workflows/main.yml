@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.changes.outputs.frontend }}
+      backend: ${{ steps.changes.outputs.backend }}
+      executor: ${{ steps.changes.outputs.executor }}
+      sandbox: ${{ steps.changes.outputs.sandbox }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed files
+        id: changes
+        run: |
+          CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha || 'HEAD~1' }} HEAD)
+          echo "frontend=$(echo "$CHANGED" | grep -q '^frontend/' && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "backend=$(echo "$CHANGED" | grep -q '^backend/' && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "executor=$(echo "$CHANGED" | grep -q '^executor/' && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "sandbox=$(echo "$CHANGED" | grep -q '^sandbox/' && echo true || echo false)" >> $GITHUB_OUTPUT
+
+  lint-test-backend:
+    name: Backend Lint & Test
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true' && vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/lint-test-backend.yml
+
+  lint-test-frontend:
+    name: Frontend Lint
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true' && vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/lint-test-frontend.yml
+
+  build-push-backend:
+    name: Build & Push Backend
+    needs: [detect-changes, lint-test-backend]
+    if: |
+      needs.detect-changes.outputs.backend == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/build-push-backend.yml
+    secrets: inherit
+
+  build-push-frontend:
+    name: Build & Push Frontend
+    needs: [detect-changes, lint-test-frontend]
+    if: |
+      needs.detect-changes.outputs.frontend == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/build-push-frontend.yml
+    secrets: inherit
+
+  build-push-executor:
+    name: Build & Push Executor
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.executor == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/build-push-executor.yml
+    secrets: inherit
+
+  build-push-sandbox:
+    name: Build & Push Sandbox
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.sandbox == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/build-push-sandbox.yml
+    secrets: inherit
+
+  deploy:
+    name: Deploy to VPS
+    needs:
+      - build-push-backend
+      - build-push-frontend
+      - build-push-executor
+      - build-push-sandbox
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/deploy-vps.yml
+    secrets: inherit

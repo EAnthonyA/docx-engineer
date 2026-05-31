@@ -1,0 +1,55 @@
+services:
+  frontend:
+    image: ${DOCKERHUB_USERNAME}/docx-engineer-frontend:latest
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.5"
+
+  backend:
+    image: ${DOCKERHUB_USERNAME}/docx-engineer-backend:latest
+    restart: unless-stopped
+    volumes:
+      - jobs_data:/jobs
+    environment:
+      - JOBS_DIR=/jobs
+      - EXECUTOR_URL=http://executor:8001
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      - SECURE_COOKIES=true
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://docx.yourdomain.com}
+    depends_on:
+      - executor
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1"
+
+  executor:
+    image: ${DOCKERHUB_USERNAME}/docx-engineer-executor:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - jobs_data:/jobs
+    environment:
+      - JOBS_DIR=/jobs
+      - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer-sandbox:latest
+      - SANDBOX_TIMEOUT=30
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+
+volumes:
+  jobs_data:
+    name: docx-engineer-jobs
