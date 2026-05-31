@@ -65,20 +65,9 @@ make test-sandbox
 
 CI/CD via GitHub Actions — pushes to `main` build and deploy automatically.
 
-**GitHub secrets required:**
-
-```
-VPS_HOST            VPS_USER            VPS_SSH_KEY
-DOCKERHUB_USERNAME  DOCKERHUB_TOKEN
-GEMINI_API_KEY      ADMIN_PASSWORD_HASH  SESSION_SECRET
-CORS_ORIGINS
-```
-
-Docker Hub: create one public repo named `docx-engineer`. CI pushes four tags: `:backend`, `:frontend`, `:executor`, `:sandbox`.
-
-App runs on port `8080`. Put Cloudflare or nginx in front for TLS.
-
-Generate password hash:
+Set `ADMIN_PASSWORD_HASH` (bcrypt) instead of plaintext `ADMIN_PASSWORD`. Generate with:
 ```bash
 make hash-password
 ```
+
+App runs on port `8080`. Put Cloudflare or nginx in front for TLS.
