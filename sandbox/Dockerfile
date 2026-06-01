@@ -6,6 +6,7 @@ RUN pip install --no-cache-dir "python-docx==1.1.2" \
 WORKDIR /work
 
 COPY entrypoint.py /work/entrypoint.py
+COPY docxkit.py /work/docxkit.py
 
 USER appuser
 

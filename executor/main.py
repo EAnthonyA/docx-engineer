@@ -7,13 +7,17 @@ import docker
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-logging.basicConfig(level=logging.INFO)
+_log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=_log_level)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("docker").setLevel(logging.WARNING)
 log = logging.getLogger("executor")
 
 app = FastAPI()
 
 SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "docx-sandbox")
 JOBS_DIR = os.environ.get("JOBS_DIR", "/jobs")
+HOST_JOBS_DIR = os.environ.get("HOST_JOBS_DIR", JOBS_DIR)
 SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "30"))
 
 # Defense-in-depth: reject obvious escape hatches before even running the container.
@@ -49,6 +53,7 @@ def _static_check(script: str) -> str | None:
 @app.post("/run")
 def run_job(req: RunRequest):
     job_dir = Path(JOBS_DIR) / req.job_id
+    host_job_dir = Path(HOST_JOBS_DIR) / req.job_id
     script_path = job_dir / "script.py"
     in_path = job_dir / "in.docx"
     out_dir = job_dir / "out"
@@ -68,35 +73,47 @@ def run_job(req: RunRequest):
     client = docker.from_env()
     container = None
     try:
-        container = client.containers.run(
+        container = client.containers.create(
             SANDBOX_IMAGE,
-            detach=True,
             network_mode="none",
-            read_only=True,
             tmpfs={"/tmp": "size=64m"},
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
-            mem_limit="256m",
+            mem_limit="1g",
             nano_cpus=1_000_000_000,
             pids_limit=64,
             volumes={
-                str(in_path.resolve()): {"bind": "/work/in.docx", "mode": "ro"},
-                str(out_dir.resolve()): {"bind": "/work/out", "mode": "rw"},
-                str(script_path.resolve()): {"bind": "/work/script.py", "mode": "ro"},
+                str(host_job_dir / "in.docx"): {"bind": "/work/in.docx", "mode": "ro"},
+                str(host_job_dir / "out"): {"bind": "/work/out", "mode": "rw"},
+                str(host_job_dir / "script.py"): {"bind": "/work/script.py", "mode": "ro"},
             },
         )
+        container.start()
 
         result = container.wait(timeout=SANDBOX_TIMEOUT)
         exit_code = result["StatusCode"]
+        container_logs = container.logs(stdout=True, stderr=True).decode(errors="replace").strip()
+        if container_logs:
+            log.debug("Sandbox container output:\n%s", container_logs)
 
         if exit_code == 0:
+            log.info("Sandbox succeeded for job %s", req.job_id)
             return {"success": True, "error": None}
+
+        if exit_code == 137:
+            error = "OOM: sandbox killed (out of memory). Script must be more memory-efficient: avoid storing large intermediate lists, process paragraphs one at a time without accumulating data."
+            log.warning("Sandbox OOM for job %s", req.job_id)
+            return {"success": False, "error": error}
 
         error_file = out_dir / "error.txt"
         error = error_file.read_text() if error_file.exists() else "No traceback captured"
+        log.warning("Sandbox failed for job %s (exit %d): %s", req.job_id, exit_code, error)
         return {"success": False, "error": error}
 
     except Exception as e:
+        if "timed out" in str(e).lower() or "ReadTimeout" in type(e).__name__:
+            log.warning("Sandbox timeout for job %s (limit %ds)", req.job_id, SANDBOX_TIMEOUT)
+            return {"success": False, "error": f"Timeout: script took longer than {SANDBOX_TIMEOUT}s. Rewrite for performance: avoid nested loops, process paragraphs in a single pass, do not re-parse XML repeatedly."}
         log.exception("Sandbox run failed for job %s", req.job_id)
         return {"success": False, "error": f"Executor error: {e}"}
     finally:

@@ -89,6 +89,11 @@ export default function JobPage() {
             I gave it a few tries but couldn't quite get that right. Want to try describing it a
             different way? The more specific, the better.
           </p>
+          {job.last_error && (
+            <pre style={{ textAlign: 'left', background: '#f3f3f3', padding: '12px 16px', borderRadius: 8, fontSize: 13, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#c0392b' }}>
+              {job.last_error}
+            </pre>
+          )}
 
           <div style={{ width: '100%', maxWidth: 480 }}>
             <div className="field" style={{ marginBottom: 12 }}>

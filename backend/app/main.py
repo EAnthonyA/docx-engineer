@@ -1,5 +1,9 @@
 import logging
 import os
+
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -182,7 +186,17 @@ def _run_agent_loop(job_id: str) -> None:
 
     job_dir = JOBS_DIR / job_id
 
+    try:
+        _agent_loop_inner(job_id, job, job_dir)
+    except Exception:
+        log.exception("Job %s agent loop crashed", job_id)
+        job.status = "stuck"
+        job.last_error = "Internal error — check server logs"
+
+
+def _agent_loop_inner(job_id: str, job, job_dir: Path) -> None:
     for _attempt in range(MAX_ATTEMPTS):
+        log.debug("Job %s attempt %d/%d start", job_id, _attempt + 1, MAX_ATTEMPTS)
         try:
             doc_summary = docx_inspect.summarize(job.input_path)
         except Exception as e:
@@ -206,22 +220,28 @@ def _run_agent_loop(job_id: str) -> None:
         out_dir.mkdir(exist_ok=True)
 
         result = sandbox.run_script(job_id)
+        log.debug("Job %s attempt %d sandbox result: success=%s error=%r",
+                  job_id, _attempt + 1, result.get("success"), result.get("error"))
 
         if not result["success"]:
             job.history.append((script, f"Script crashed: {result.get('error', 'unknown')}"))
             continue
 
         output_path = str(out_dir / "out.docx")
-        if not Path(output_path).exists():
+        file_exists = Path(output_path).exists()
+        log.debug("Job %s attempt %d output file exists: %s", job_id, _attempt + 1, file_exists)
+        if not file_exists:
             job.history.append((script, "Script completed but produced no output file"))
             continue
 
         try:
             diff = docx_inspect.compute_diff(job.input_path, output_path)
         except Exception as e:
+            log.exception("Job %s attempt %d compute_diff failed", job_id, _attempt + 1)
             job.history.append((script, f"Output file unreadable: {e}"))
             continue
 
+        log.debug("Job %s attempt %d diff: total=%d changed=%d", job_id, _attempt + 1, diff["total"], diff["changed"])
         if diff["changed"] == 0:
             job.history.append((script, "Script ran but made no changes to the document"))
             continue
@@ -229,8 +249,11 @@ def _run_agent_loop(job_id: str) -> None:
         job.output_path = output_path
         job.diff = diff
         job.status = "needs_review"
+        log.info("Job %s ready for review after %d attempt(s): %d change(s)",
+                 job_id, _attempt + 1, diff["changed"])
         return
 
     job.status = "stuck"
     if job.history:
         job.last_error = job.history[-1][1]
+    log.info("Job %s stuck after %d attempts: %s", job_id, MAX_ATTEMPTS, job.last_error)

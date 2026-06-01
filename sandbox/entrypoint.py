@@ -3,6 +3,9 @@ import traceback
 import importlib.util
 from pathlib import Path
 
+from docx import Document
+from docxkit import DocxTools
+
 INPUT_PATH = "/work/in.docx"
 OUTPUT_PATH = "/work/out/out.docx"
 SCRIPT_PATH = "/work/script.py"
@@ -17,16 +20,18 @@ def main():
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        if not hasattr(module, "transform"):
+        if not hasattr(module, "edit"):
             raise AttributeError(
-                "Script must define: def transform(input_path: str, output_path: str) -> None"
+                "Script must define: def edit(doc, tools) -> None"
             )
 
-        module.transform(INPUT_PATH, OUTPUT_PATH)
+        doc = Document(INPUT_PATH)
+        module.edit(doc, DocxTools())
+        doc.save(OUTPUT_PATH)
 
         if not Path(OUTPUT_PATH).exists():
             raise FileNotFoundError(
-                f"transform() finished but produced no output at {OUTPUT_PATH}"
+                f"edit() finished but produced no output at {OUTPUT_PATH}"
             )
 
         sys.exit(0)

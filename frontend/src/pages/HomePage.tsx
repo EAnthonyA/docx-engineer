@@ -72,7 +72,7 @@ export default function HomePage() {
                 required
               />
               <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {EXAMPLES.slice(1).map((ex) => (
+                {EXAMPLES.map((ex) => (
                   <button
                     key={ex}
                     type="button"

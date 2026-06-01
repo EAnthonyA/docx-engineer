@@ -24,9 +24,10 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/app:/app/app
-      - jobs_data:/jobs
+      - ./jobs:/jobs
     environment:
       - JOBS_DIR=/jobs
+      - LOG_LEVEL=DEBUG
       - EXECUTOR_URL=http://executor:8001
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - SESSION_SECRET=${SESSION_SECRET:-dev-secret-change-me}
@@ -45,12 +46,11 @@ services:
       - "8001:8001"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - jobs_data:/jobs
+      - ./jobs:/jobs
     environment:
       - JOBS_DIR=/jobs
+      - HOST_JOBS_DIR=${PWD}/jobs
+      - LOG_LEVEL=DEBUG
       - SANDBOX_IMAGE=docx-sandbox
-      - SANDBOX_TIMEOUT=30
+      - SANDBOX_TIMEOUT=120
 
-volumes:
-  jobs_data:
-    name: ${USER}-docx-engineer-jobs

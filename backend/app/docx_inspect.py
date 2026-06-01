@@ -1,40 +1,35 @@
 import json
+import zipfile
 from difflib import SequenceMatcher
 
 from docx import Document
-
-
-def _run_dict(run) -> dict:
-    return {
-        "text": run.text,
-        "bold": bool(run.bold),
-        "italic": bool(run.italic),
-        "underline": bool(run.underline),
-    }
-
-
-def _para_dict(para) -> dict:
-    runs = [_run_dict(r) for r in para.runs if r.text]
-    return {
-        "text": para.text,
-        "style": para.style.name if para.style else "Normal",
-        "runs": runs,
-    }
+from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph as _DocxParagraph
+from lxml import etree
 
 
 def summarize(path: str) -> str:
     """Return a JSON string describing the document structure for the LLM prompt."""
     doc = Document(path)
     paras = []
-    for i, p in enumerate(doc.paragraphs):
-        if p.text.strip():
-            paras.append({
-                "index": i,
-                "style": p.style.name if p.style else "Normal",
-                "text_preview": p.text[:300],
-                "run_count": len(p.runs),
-            })
-        if len(paras) >= 50:
+    total = 0
+    non_empty = 0
+    for p in doc.element.body:
+        if p.tag != qn("w:p"):
+            continue
+        para = _DocxParagraph(p, doc)
+        total += 1
+        text = para.text
+        if text.strip():
+            non_empty += 1
+            if len(paras) < 50:
+                paras.append({
+                    "index": total - 1,
+                    "style": para.style.name if para.style else "Normal",
+                    "text_preview": text[:300],
+                    "run_count": len(para.runs),
+                })
+        if total >= 2000:
             break
 
     tables = [
@@ -43,55 +38,79 @@ def summarize(path: str) -> str:
     ]
 
     return json.dumps({
-        "total_paragraphs": len(doc.paragraphs),
-        "non_empty_paragraphs": sum(1 for p in doc.paragraphs if p.text.strip()),
+        "total_paragraphs": total,
+        "non_empty_paragraphs": non_empty,
         "sample_paragraphs": paras,
         "tables": tables,
     }, indent=2)
 
 
+_DIFF_PARA_LIMIT = 50
+_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _extract_paras_fast(docx_path: str, limit: int) -> list:
+    """Stream first `limit` paragraphs from docx without loading the full document into memory."""
+    paras = []
+    with zipfile.ZipFile(docx_path) as z:
+        with z.open("word/document.xml") as f:
+            for _, el in etree.iterparse(f, events=("end",), tag=f"{{{_W}}}p"):
+                runs = []
+                for r in el.findall(f".//{{{_W}}}r"):
+                    rpr = r.find(f"{{{_W}}}rPr")
+                    t_el = r.find(f"{{{_W}}}t")
+                    t = (t_el.text or "") if t_el is not None else ""
+                    if t:
+                        runs.append({
+                            "text": t,
+                            "bold": rpr is not None and rpr.find(f"{{{_W}}}b") is not None,
+                            "italic": rpr is not None and rpr.find(f"{{{_W}}}i") is not None,
+                            "underline": rpr is not None and rpr.find(f"{{{_W}}}u") is not None,
+                        })
+                text = "".join(r["text"] for r in runs)
+                paras.append({"text": text, "style": "Normal", "runs": runs})
+                el.clear()
+                if len(paras) >= limit:
+                    break
+    return paras
+
+
+def _entry(status: str, before, after) -> dict:
+    return {"status": status, "before": before, "after": after}
+
+
+def _replace_entries(befores: list, afters: list) -> list:
+    """Pair up replaced paragraphs; the longer side's tail becomes added/removed."""
+    out = []
+    for k in range(max(len(befores), len(afters))):
+        before = befores[k] if k < len(befores) else None
+        after = afters[k] if k < len(afters) else None
+        if before is not None and after is not None:
+            status = "unchanged" if before == after else "changed"
+        else:
+            status = "removed" if before is not None else "added"
+        out.append(_entry(status, before, after))
+    return out
+
+
 def compute_diff(original_path: str, modified_path: str) -> dict:
-    """Compare two docx files paragraph by paragraph. Returns diff suitable for JSON serialization."""
-    orig_paras = [_para_dict(p) for p in Document(original_path).paragraphs]
-    mod_paras = [_para_dict(p) for p in Document(modified_path).paragraphs]
+    """Compare first _DIFF_PARA_LIMIT paragraphs of two docx files using fast streaming XML parse."""
+    orig = _extract_paras_fast(original_path, _DIFF_PARA_LIMIT)
+    mod = _extract_paras_fast(modified_path, _DIFF_PARA_LIMIT)
 
-    orig_texts = [p["text"] for p in orig_paras]
-    mod_texts = [p["text"] for p in mod_paras]
-
-    matcher = SequenceMatcher(None, orig_texts, mod_texts, autojunk=False)
+    matcher = SequenceMatcher(None, [p["text"] for p in orig],
+                              [p["text"] for p in mod], autojunk=True)
     entries = []
-
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
-            for i, j in zip(range(i1, i2), range(j1, j2)):
-                entries.append({"status": "unchanged", "before": orig_paras[i], "after": mod_paras[j]})
-
-        elif tag == "replace":
-            for k in range(max(i2 - i1, j2 - j1)):
-                bi = i1 + k if i1 + k < i2 else None
-                aj = j1 + k if j1 + k < j2 else None
-                before = orig_paras[bi] if bi is not None else None
-                after = mod_paras[aj] if aj is not None else None
-
-                if before is not None and after is not None:
-                    status = "unchanged" if before == after else "changed"
-                elif before is not None:
-                    status = "removed"
-                else:
-                    status = "added"
-                entries.append({"status": status, "before": before, "after": after})
-
+            entries += [_entry("unchanged", orig[i], mod[j])
+                        for i, j in zip(range(i1, i2), range(j1, j2))]
         elif tag == "delete":
-            for i in range(i1, i2):
-                entries.append({"status": "removed", "before": orig_paras[i], "after": None})
-
+            entries += [_entry("removed", orig[i], None) for i in range(i1, i2)]
         elif tag == "insert":
-            for j in range(j1, j2):
-                entries.append({"status": "added", "before": None, "after": mod_paras[j]})
+            entries += [_entry("added", None, mod[j]) for j in range(j1, j2)]
+        else:  # replace
+            entries += _replace_entries(orig[i1:i2], mod[j1:j2])
 
-    changed_count = sum(1 for e in entries if e["status"] != "unchanged")
-    return {
-        "total": len(entries),
-        "changed": changed_count,
-        "entries": entries,
-    }
+    changed = sum(1 for e in entries if e["status"] != "unchanged")
+    return {"total": len(entries), "changed": changed, "entries": entries}

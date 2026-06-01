@@ -50,3 +50,37 @@ def test_compute_diff_detects_change():
     assert diff["changed"] > 0
     changed = [e for e in diff["entries"] if e["status"] == "changed"]
     assert len(changed) >= 1
+
+
+def test_compute_diff_detects_added_paragraphs():
+    orig = _make_docx(["one", "two"])
+    mod = _make_docx(["one", "two", "three"])
+    diff = compute_diff(orig, mod)
+    added = [e for e in diff["entries"] if e["status"] == "added"]
+    assert len(added) == 1
+    assert added[0]["before"] is None
+    assert added[0]["after"]["text"] == "three"
+    assert diff["changed"] == 1
+
+
+def test_compute_diff_detects_removed_paragraphs():
+    orig = _make_docx(["one", "two", "three"])
+    mod = _make_docx(["one", "three"])
+    diff = compute_diff(orig, mod)
+    removed = [e for e in diff["entries"] if e["status"] == "removed"]
+    assert len(removed) == 1
+    assert removed[0]["after"] is None
+    assert removed[0]["before"]["text"] == "two"
+
+
+def test_compute_diff_replace_length_mismatch():
+    # 1 original line replaced by 2 new lines: one paired "changed", one tail "added".
+    orig = _make_docx(["alpha", "shared"])
+    mod = _make_docx(["beta", "gamma", "shared"])
+    diff = compute_diff(orig, mod)
+    statuses = [e["status"] for e in diff["entries"]]
+    assert statuses.count("changed") == 1
+    assert statuses.count("added") == 1
+    assert statuses.count("unchanged") == 1  # "shared"
+    assert diff["total"] == 3
+    assert diff["changed"] == 2
