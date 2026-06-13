@@ -54,6 +54,11 @@ export default function HomePage() {
 
       <main className="main-content">
         <div className="container">
+          <div className="greeting">
+            <h1 className="greeting__title">Hello!</h1>
+            <p className="greeting__sub">What would you like to edit today?</p>
+          </div>
+
           <form onSubmit={handleSubmit} className="stack">
             <div className="field">
               <label>Your document</label>
@@ -61,7 +66,7 @@ export default function HomePage() {
             </div>
 
             <div className="field">
-              <label htmlFor="instruction">What would you like to do?</label>
+              <label htmlFor="instruction">Describe what to change</label>
               <textarea
                 id="instruction"
                 className="textarea"

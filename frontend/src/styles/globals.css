@@ -448,6 +448,23 @@ body {
   font-weight: 600;
 }
 
+/* ---- Greeting ---- */
+.greeting {
+  margin-bottom: 32px;
+}
+
+.greeting__title {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.greeting__sub {
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
 /* ---- Misc ---- */
 .main-content {
   flex: 1;
