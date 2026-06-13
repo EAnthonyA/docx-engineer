@@ -10,10 +10,6 @@ build: sandbox
 
 # Start dev stack (frontend + backend + executor)
 run:
-	docker compose up
-
-# Start in background
-up:
 	docker compose up -d
 
 stop:

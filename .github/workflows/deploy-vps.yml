@@ -28,6 +28,8 @@ jobs:
             set -e
             cd ~/docx-engineer
 
+            docker network create shared-proxy || true
+
             # Write .env from secrets
             cat > .env <<EOF
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}

@@ -1,11 +1,15 @@
 services:
   frontend:
     image: ${DOCKERHUB_USERNAME}/docx-engineer:frontend
+    container_name: docx-engineer-frontend
     ports:
       - "8080:80"
     restart: unless-stopped
     depends_on:
       - backend
+    networks:
+      - default
+      - shared-proxy
     deploy:
       resources:
         limits:
@@ -53,3 +57,7 @@ services:
 volumes:
   jobs_data:
     name: docx-engineer-jobs
+
+networks:
+  shared-proxy:
+    external: true
