@@ -57,4 +57,5 @@ services:
       - LOG_LEVEL=DEBUG
       - SANDBOX_IMAGE=docx-sandbox
       - SANDBOX_TIMEOUT=120
+      - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1536m}
 

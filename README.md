@@ -62,6 +62,7 @@ make test-sandbox
 | `ADMIN_PASSWORD` | Dev only | Plaintext password (default: `admin`) |
 | `ADMIN_PASSWORD_HASH` | Prod | Bcrypt hash — generate with `make hash-password` |
 | `GEMINI_MODEL` | No | Override Gemini model (default: `gemini-2.5-flash-lite`) |
+| `SANDBOX_MEMORY` | No | Sandbox container memory limit (default `1g`; dev compose sets `1536m`) |
 | `CORS_ORIGINS` | Prod | Comma-separated allowed origins |
 
 ## Production deploy

@@ -51,6 +51,7 @@ services:
       - JOBS_DIR=/jobs
       - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox
       - SANDBOX_TIMEOUT=30
+      - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1g}
     deploy:
       resources:
         limits:
