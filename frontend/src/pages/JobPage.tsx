@@ -12,6 +12,8 @@ export default function JobPage() {
   const [showRefine, setShowRefine] = useState(false)
   const [refineNote, setRefineNote] = useState('')
   const [refineError, setRefineError] = useState('')
+  const [answer, setAnswer] = useState('')
+  const [answerError, setAnswerError] = useState('')
 
   const { data: job, error } = useQuery({
     queryKey: ['job', jobId],
@@ -29,6 +31,17 @@ export default function JobPage() {
     },
     onError: (e) => {
       setRefineError((e as Error).message)
+    },
+  })
+
+  const answerJob = useMutation({
+    mutationFn: () => api.answerJob(jobId!, answer),
+    onSuccess: () => {
+      setAnswer('')
+      qc.invalidateQueries({ queryKey: ['job', jobId] })
+    },
+    onError: (e) => {
+      setAnswerError((e as Error).message)
     },
   })
 
@@ -62,6 +75,47 @@ export default function JobPage() {
           <button className="btn btn--primary" onClick={() => navigate('/')}>
             Start over
           </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (job && job.status === 'needs_clarification') {
+    return (
+      <div className="page">
+        {header}
+        <div className="stuck-page">
+          <h2>Quick question before I start</h2>
+          <p style={{ fontSize: 16, color: '#222', marginBottom: 20 }}>{job.question}</p>
+
+          <div style={{ width: '100%', maxWidth: 480 }}>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <textarea
+                className="textarea"
+                rows={3}
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+                placeholder="Your answer(s)…"
+                autoFocus
+              />
+            </div>
+            {answerError && <p className="error-text">{answerError}</p>}
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                className="btn btn--primary"
+                disabled={answerJob.isPending || !answer.trim()}
+                onClick={() => {
+                  setAnswerError('')
+                  answerJob.mutate()
+                }}
+              >
+                {answerJob.isPending ? 'Sending…' : 'Continue'}
+              </button>
+              <button className="btn btn--secondary" onClick={() => navigate('/')}>
+                Start over
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     )

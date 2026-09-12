@@ -88,6 +88,18 @@ RULES:
 - The function must be self-contained and complete.\
 """
 
+_CLARIFY_SYSTEM = """\
+You are reviewing a document-editing request before any code is written.
+Decide whether the instruction is unambiguous enough to implement directly.
+
+Reply with exactly CLEAR if it is clear. Otherwise ask about EVERYTHING that
+is still ambiguous or missing, as one or more short, specific questions. Ask
+only about details that matter for making the edit (which text, what value,
+what formatting, which part of the document). Number the questions if there
+are several. Do not ask about anything already specified in the instruction
+or in previous answers.\
+"""
+
 
 def _model():
     api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -103,12 +115,26 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
-def generate_script(instruction: str, doc_summary: str, history: list) -> str:
+def _clarifications_block(clarifications) -> str:
+    if not clarifications:
+        return ""
+    lines = ["\nCLARIFICATIONS (already asked and answered):"]
+    for q, a in clarifications:
+        lines.append(f"Q: {q}")
+        lines.append(f"A: {a}")
+    return "\n".join(lines)
+
+
+def generate_script(instruction: str, doc_summary: str, history: list, clarifications: list | None = None) -> str:
     """Call Gemini to produce a transform() function. Returns raw Python source."""
     parts = [
         f"DOCUMENT STRUCTURE:\n{doc_summary}",
         f"\nUSER INSTRUCTION:\n{instruction}",
     ]
+
+    block = _clarifications_block(clarifications)
+    if block:
+        parts.append(block)
 
     if history:
         parts.append("\nPREVIOUS ATTEMPTS — learn from these failures:")
@@ -130,3 +156,24 @@ def generate_script(instruction: str, doc_summary: str, history: list) -> str:
     log.debug("Gemini script:\n%s", script)
 
     return script
+
+
+def ask_clarification(instruction: str, doc_summary: str, clarifications: list | None = None) -> str | None:
+    """Return a clarifying question if the instruction is ambiguous, else None."""
+    parts = [
+        f"DOCUMENT STRUCTURE:\n{doc_summary}",
+        f"\nUSER INSTRUCTION:\n{instruction}",
+    ]
+    block = _clarifications_block(clarifications)
+    if block:
+        parts.append(block)
+    parts.append("\nReply with CLEAR, or ask your question(s):")
+    prompt = "\n".join(parts)
+
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    model = genai.GenerativeModel(model_name, system_instruction=_CLARIFY_SYSTEM)
+    text = _strip_fences(model.generate_content(prompt).text).strip()
+
+    if text.upper().replace(".", "").strip() == "CLEAR":
+        return None
+    return text

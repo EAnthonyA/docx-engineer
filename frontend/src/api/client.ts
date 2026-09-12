@@ -70,6 +70,14 @@ export const api = {
     })
   },
 
+  answerJob(jobId: string, answer: string) {
+    return request<Job>(`/api/jobs/${jobId}/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer }),
+    })
+  },
+
   downloadUrl(jobId: string) {
     return `/api/jobs/${jobId}/download`
   },
