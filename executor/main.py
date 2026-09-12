@@ -19,6 +19,7 @@ SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "docx-sandbox")
 JOBS_DIR = os.environ.get("JOBS_DIR", "/jobs")
 HOST_JOBS_DIR = os.environ.get("HOST_JOBS_DIR", JOBS_DIR)
 SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "30"))
+SANDBOX_MEMORY = os.environ.get("SANDBOX_MEMORY", "1g")
 
 # Defense-in-depth: reject obvious escape hatches before even running the container.
 # The container is the real wall; these checks are secondary.
@@ -79,7 +80,7 @@ def run_job(req: RunRequest):
             tmpfs={"/tmp": "size=64m"},
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
-            mem_limit="1g",
+            mem_limit=SANDBOX_MEMORY,
             nano_cpus=1_000_000_000,
             pids_limit=64,
             volumes={
