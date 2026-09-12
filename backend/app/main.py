@@ -83,6 +83,7 @@ def _job_resp(job: Job) -> dict:
         "id": job.id,
         "status": job.status,
         "instruction": job.instruction,
+        "question": job.question,
         "diff": job.diff,
         "last_error": job.last_error,
     }
@@ -168,6 +169,36 @@ async def refine_job(
     job.diff = None
     job.last_error = None
 
+    background_tasks.add_task(_run_agent_loop, job.id, False)
+    return _job_resp(job)
+
+
+class AnswerRequest(BaseModel):
+    answer: str
+
+
+@app.post("/api/jobs/{job_id}/answer")
+async def answer_job(
+    job_id: str,
+    req: AnswerRequest,
+    background_tasks: BackgroundTasks,
+    _: bool = Depends(verify_session),
+):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "needs_clarification":
+        raise HTTPException(400, "Job is not waiting for an answer")
+
+    answer = req.answer.strip()
+    if not answer:
+        raise HTTPException(400, "Answer is required")
+
+    if job.question:
+        job.clarifications.append((job.question, answer))
+    job.question = None
+    job.status = "running"
+
     background_tasks.add_task(_run_agent_loop, job.id)
     return _job_resp(job)
 
@@ -181,35 +212,52 @@ def health():
 # Agent loop (runs in thread pool — blocking I/O is intentional here)
 # ---------------------------------------------------------------------------
 
-def _run_agent_loop(job_id: str) -> None:
+def _run_agent_loop(job_id: str, clarify: bool = True) -> None:
     job = get_job(job_id)
     if not job:
         return
 
-    job_dir = JOBS_DIR / job_id
-
     # Serialize jobs: wait for any in-flight job to finish before starting.
     with _job_slot:
         try:
-            _agent_loop_inner(job_id, job, job_dir)
+            _run_job(job_id, job, clarify)
         except Exception:
             log.exception("Job %s agent loop crashed", job_id)
             job.status = "stuck"
             job.last_error = "Internal error — check server logs"
 
 
-def _agent_loop_inner(job_id: str, job, job_dir: Path) -> None:
-    for _attempt in range(MAX_ATTEMPTS):
-        log.debug("Job %s attempt %d/%d start", job_id, _attempt + 1, MAX_ATTEMPTS)
+def _run_job(job_id: str, job, clarify: bool) -> None:
+    try:
+        doc_summary = docx_inspect.summarize(job.input_path)
+    except Exception as e:
+        job.status = "stuck"
+        job.last_error = f"Could not read your document: {e}"
+        return
+
+    if clarify:
         try:
-            doc_summary = docx_inspect.summarize(job.input_path)
+            question = llm.ask_clarification(job.instruction, doc_summary, job.clarifications)
         except Exception as e:
             job.status = "stuck"
-            job.last_error = f"Could not read your document: {e}"
+            job.last_error = f"AI service error: {e}"
             return
 
+        if question:
+            job.question = question
+            job.status = "needs_clarification"
+            log.info("Job %s waiting for clarification: %s", job_id, question)
+            return
+
+    _agent_loop_inner(job_id, job, JOBS_DIR / job_id, doc_summary)
+
+
+def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None:
+    for _attempt in range(MAX_ATTEMPTS):
+        log.debug("Job %s attempt %d/%d start", job_id, _attempt + 1, MAX_ATTEMPTS)
+
         try:
-            script = llm.generate_script(job.instruction, doc_summary, job.history)
+            script = llm.generate_script(job.instruction, doc_summary, job.history, job.clarifications)
         except Exception as e:
             job.status = "stuck"
             job.last_error = f"AI service error: {e}"

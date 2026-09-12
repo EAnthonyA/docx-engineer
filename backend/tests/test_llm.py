@@ -67,3 +67,45 @@ def test_deepseek_api_error(monkeypatch):
     monkeypatch.setattr(llm.httpx, "post", fake_post)
     with pytest.raises(RuntimeError):
         llm.generate_script("do x", "{}", [])
+
+
+def test_parse_clarify_clear():
+    assert llm._parse_clarify("CLEAR") is None
+    assert llm._parse_clarify("Clear.") is None
+
+
+def test_parse_clarify_question():
+    assert llm._parse_clarify("Which paragraph should be bold?") == "Which paragraph should be bold?"
+
+
+def test_ask_deepseek_clear(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "deepseek")
+    monkeypatch.setattr(llm, "_chat", lambda *a, **k: "CLEAR")
+    assert llm.ask_clarification("bold headings", "{}", []) is None
+
+
+def test_ask_deepseek_question(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "deepseek")
+    monkeypatch.setattr(llm, "_chat", lambda *a, **k: "Which headings?")
+    assert llm.ask_clarification("bold headings", "{}", []) == "Which headings?"
+
+
+def test_clarifications_included_in_prompt(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["messages"] = kwargs["json"]["messages"]
+        return _FakeResp(
+            200,
+            {"choices": [{"message": {"content": "def edit(doc, tools):\n    pass"}}]},
+        )
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    llm.generate_script("bold it", "{}", [], [("Which part?", "The title")])
+
+    user_msg = captured["messages"][1]["content"]
+    assert "Which part?" in user_msg
+    assert "The title" in user_msg

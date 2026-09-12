@@ -1,4 +1,4 @@
-export type JobStatus = 'running' | 'needs_review' | 'done' | 'stuck'
+export type JobStatus = 'running' | 'needs_review' | 'needs_clarification' | 'done' | 'stuck'
 
 export interface Run {
   text: string
@@ -29,6 +29,7 @@ export interface Job {
   id: string
   status: JobStatus
   instruction: string
+  question: string | null
   diff: Diff | null
   last_error: string | null
 }

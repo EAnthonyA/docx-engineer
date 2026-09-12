@@ -14,11 +14,13 @@ class Job:
     input_path: str
     instruction: str
     history: list = field(default_factory=list)  # [(script, outcome), ...]
-    status: str = "running"  # running | needs_review | done | stuck
+    status: str = "running"  # running | needs_review | needs_clarification | done | stuck
     output_path: str | None = None
     diff: dict | None = None
     last_error: str | None = None
     last_script: str | None = None
+    question: str | None = None
+    clarifications: list = field(default_factory=list)  # [(question, answer), ...]
     created_at: float = field(default_factory=time.time)
 
 
