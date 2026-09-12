@@ -5,7 +5,7 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 import shutil
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,7 +24,9 @@ MAX_ATTEMPTS = 5
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 MAX_INSTRUCTION_LEN = 2000
 
-_thread_pool = ThreadPoolExecutor(max_workers=4)
+# Single-user app: only one job may run at a time. Each job spawns a
+# memory-hungry sandbox container, so allowing concurrency risks OOM.
+_job_slot = threading.Semaphore(1)
 
 
 @asynccontextmanager
@@ -186,12 +188,14 @@ def _run_agent_loop(job_id: str) -> None:
 
     job_dir = JOBS_DIR / job_id
 
-    try:
-        _agent_loop_inner(job_id, job, job_dir)
-    except Exception:
-        log.exception("Job %s agent loop crashed", job_id)
-        job.status = "stuck"
-        job.last_error = "Internal error — check server logs"
+    # Serialize jobs: wait for any in-flight job to finish before starting.
+    with _job_slot:
+        try:
+            _agent_loop_inner(job_id, job, job_dir)
+        except Exception:
+            log.exception("Job %s agent loop crashed", job_id)
+            job.status = "stuck"
+            job.last_error = "Internal error — check server logs"
 
 
 def _agent_loop_inner(job_id: str, job, job_dir: Path) -> None:
