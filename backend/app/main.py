@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from .auth import clear_session, create_session, verify_password, verify_session
 from .jobs import JOBS_DIR, Job, cleanup_old_jobs, create_job, get_job
-from . import docx_inspect, gemini, sandbox
+from . import docx_inspect, llm, sandbox
 
 log = logging.getLogger("main")
 
@@ -205,7 +205,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path) -> None:
             return
 
         try:
-            script = gemini.generate_script(job.instruction, doc_summary, job.history)
+            script = llm.generate_script(job.instruction, doc_summary, job.history)
         except Exception as e:
             job.status = "stuck"
             job.last_error = f"AI service error: {e}"

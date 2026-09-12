@@ -2,15 +2,15 @@
 
 Upload a `.docx`, describe the edit in plain language, get back a modified file.
 
-Gemini generates a `python-docx` script. The script runs in a hardened Docker sandbox (no network, no filesystem, all capabilities dropped). You review a before/after diff, then download.
+A model-agnostic AI client (DeepSeek by default, Gemini optional) generates a `python-docx` script. The script runs in a hardened Docker sandbox (no network, no filesystem, all capabilities dropped). You review a before/after diff, then download.
 
 ## How it works
 
 1. Upload `.docx` + type instruction ("make all headings bold")
-2. Backend sends doc structure + instruction to Gemini
-3. Gemini returns a `transform(input_path, output_path)` function
+2. Backend sends doc structure + instruction to the LLM
+3. The LLM returns an `edit(doc, tools)` function
 4. Executor runs it in a throwaway container: `--network none`, `--read-only`, `--cap-drop ALL`, `--memory 256m`, `--pids-limit 64`
-5. If the script crashes, the traceback feeds back to Gemini — up to 5 retry attempts
+5. If the script crashes, the traceback feeds back to the LLM — up to 5 retry attempts
 6. Diff renders paragraph-level changes; download when satisfied
 
 ## Stack
@@ -21,7 +21,7 @@ Gemini generates a `python-docx` script. The script runs in a hardened Docker sa
 | Backend | FastAPI (Python) |
 | Executor | FastAPI — only service with `docker.sock` |
 | Sandbox | `python:3.12-slim` + `python-docx`, non-root |
-| AI | Gemini 2.5 Flash Lite |
+| AI | DeepSeek (`deepseek-v4-pro`) or Gemini — see `AI_PROVIDER` |
 
 ## Local dev
 
@@ -29,7 +29,7 @@ Gemini generates a `python-docx` script. The script runs in a hardened Docker sa
 
 ```bash
 cp .env.example .env
-# Add GEMINI_API_KEY to .env
+# Add DEEPSEEK_API_KEY to .env (or GEMINI_API_KEY + set AI_PROVIDER=gemini)
 
 make sandbox    # build sandbox image (required)
 make build      # build all dev images
@@ -54,11 +54,14 @@ make test-sandbox
 
 | Variable | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | Yes | From [Google AI Studio](https://ai.google.dev/) |
+| `AI_PROVIDER` | No | `deepseek` (default) or `gemini` |
+| `DEEPSEEK_API_KEY` | Yes* | From [DeepSeek Platform](https://platform.deepseek.com/) — *required when `AI_PROVIDER=deepseek` |
+| `DEEPSEEK_MODEL` | No | Override model (default: `deepseek-v4-pro`) |
+| `GEMINI_API_KEY` | Yes* | From [Google AI Studio](https://ai.google.dev/) — *required when `AI_PROVIDER=gemini` |
 | `SESSION_SECRET` | Yes (prod) | Long random string for cookie signing |
 | `ADMIN_PASSWORD` | Dev only | Plaintext password (default: `admin`) |
 | `ADMIN_PASSWORD_HASH` | Prod | Bcrypt hash — generate with `make hash-password` |
-| `GEMINI_MODEL` | No | Override model (default: `gemini-2.5-flash-lite`) |
+| `GEMINI_MODEL` | No | Override Gemini model (default: `gemini-2.5-flash-lite`) |
 | `CORS_ORIGINS` | Prod | Comma-separated allowed origins |
 
 ## Production deploy

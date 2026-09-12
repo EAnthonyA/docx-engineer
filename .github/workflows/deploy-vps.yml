@@ -35,6 +35,8 @@ jobs:
             DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
             ADMIN_PASSWORD_HASH=${{ secrets.ADMIN_PASSWORD_HASH }}
             SESSION_SECRET=${{ secrets.SESSION_SECRET }}
+            AI_PROVIDER=${{ secrets.AI_PROVIDER }}
+            DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
             GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
             CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
             EOF
