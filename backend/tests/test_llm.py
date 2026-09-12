@@ -13,12 +13,6 @@ class _FakeResp:
         return self._payload
 
 
-def test_generate_script_unknown_provider(monkeypatch):
-    monkeypatch.setenv("AI_PROVIDER", "not-a-real-provider")
-    with pytest.raises(ValueError):
-        llm.generate_script("do x", "{}", [])
-
-
 def test_deepseek_request_shape(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")

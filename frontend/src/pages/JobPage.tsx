@@ -5,6 +5,26 @@ import { api } from '../api/client'
 import DiffView from '../components/DiffView'
 import LoadingSpinner from '../components/LoadingSpinner'
 
+function splitQuestions(question: string): { numbered: boolean; items: string[] } {
+  const text = question.trim()
+
+  // The model usually separates questions with newlines.
+  const lines = text
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (lines.length > 1) return { numbered: true, items: lines }
+
+  // Fallback: questions dumped inline as "1. … 2. … 3. …".
+  const parts = text
+    .split(/(?=\d+\.\s)/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  if (parts.length > 1) return { numbered: true, items: parts }
+
+  return { numbered: false, items: [text] }
+}
+
 export default function JobPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const navigate = useNavigate()
@@ -81,12 +101,41 @@ export default function JobPage() {
   }
 
   if (job && job.status === 'needs_clarification') {
+    const questions = splitQuestions(job.question ?? '')
+
     return (
       <div className="page">
         {header}
         <div className="stuck-page">
           <h2>Quick question before I start</h2>
-          <p style={{ fontSize: 16, color: '#222', marginBottom: 20 }}>{job.question}</p>
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 560,
+              marginBottom: 20,
+              textAlign: 'left',
+            }}
+          >
+            {questions.numbered ? (
+              <ol style={{ margin: 0, paddingLeft: 20 }}>
+                {questions.items.map((q, i) => (
+                  <li
+                    key={i}
+                    style={{
+                      fontSize: 15,
+                      lineHeight: 1.6,
+                      color: '#222',
+                      marginBottom: 10,
+                    }}
+                  >
+                    {q.replace(/^\d+\.\s*/, '')}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p style={{ fontSize: 16, color: '#222', margin: 0 }}>{questions.items[0]}</p>
+            )}
+          </div>
 
           <div style={{ width: '100%', maxWidth: 480 }}>
             <div className="field" style={{ marginBottom: 12 }}>
@@ -122,6 +171,25 @@ export default function JobPage() {
   }
 
   if (!job || job.status === 'running') {
+    if (job && job.attempt > 1) {
+      const err = job.attempt_error
+      const shortErr =
+        err && err.length > 140 ? `${err.slice(0, 140)}…` : err
+      return (
+        <div className="page">
+          {header}
+          <LoadingSpinner
+            message={`Tweaking my approach (attempt ${job.attempt} of ${job.max_attempts})`}
+            subtext={
+              shortErr
+                ? `My first try didn't quite work: ${shortErr} I'm rewriting the script with that in mind.`
+                : `My first try didn't produce the expected changes, so I'm rewriting the script.`
+            }
+          />
+        </div>
+      )
+    }
+
     return (
       <div className="page">
         {header}

@@ -20,6 +20,7 @@ JOBS_DIR = os.environ.get("JOBS_DIR", "/jobs")
 HOST_JOBS_DIR = os.environ.get("HOST_JOBS_DIR", JOBS_DIR)
 SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "30"))
 SANDBOX_MEMORY = os.environ.get("SANDBOX_MEMORY", "1g")
+SANDBOX_NETWORK = os.environ.get("SANDBOX_NETWORK", "docx-engineer-sandbox-net")
 
 # Defense-in-depth: reject obvious escape hatches before even running the container.
 # The container is the real wall; these checks are secondary.
@@ -51,6 +52,15 @@ def _static_check(script: str) -> str | None:
     return None
 
 
+def _ensure_network(client, name: str) -> None:
+    """Create the internal sandbox network if it doesn't exist yet."""
+    try:
+        client.networks.get(name)
+    except docker.errors.NotFound:
+        log.info("Creating internal sandbox network %s", name)
+        client.networks.create(name, driver="bridge", internal=True)
+
+
 @app.post("/run")
 def run_job(req: RunRequest):
     job_dir = Path(JOBS_DIR) / req.job_id
@@ -72,11 +82,12 @@ def run_job(req: RunRequest):
     os.chmod(out_dir, 0o777)
 
     client = docker.from_env()
+    _ensure_network(client, SANDBOX_NETWORK)
     container = None
     try:
         container = client.containers.create(
             SANDBOX_IMAGE,
-            network_mode="none",
+            network=SANDBOX_NETWORK,
             tmpfs={"/tmp": "size=64m"},
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],

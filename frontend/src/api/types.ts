@@ -32,4 +32,7 @@ export interface Job {
   question: string | null
   diff: Diff | null
   last_error: string | null
+  attempt: number
+  attempt_error: string | null
+  max_attempts: number
 }

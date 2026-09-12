@@ -32,12 +32,9 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - SESSION_SECRET=${SESSION_SECRET:-dev-secret-change-me}
       - CORS_ORIGINS=http://localhost:3000
-      - AI_PROVIDER=${AI_PROVIDER:-deepseek}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-pro}
       - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-lite}
     depends_on:
       - executor
 
@@ -58,4 +55,23 @@ services:
       - SANDBOX_IMAGE=docx-sandbox
       - SANDBOX_TIMEOUT=120
       - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1536m}
+      - SANDBOX_NETWORK=${USER}-docx-engineer-sandbox-net
+
+  scraper:
+    image: ${USER}-docx-engineer-scraper
+    build:
+      context: scraper
+      dockerfile: Dockerfile
+    networks:
+      - default
+      - sandbox-net
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SCRAPE_MAX_BYTES=${SCRAPE_MAX_BYTES:-1048576}
+      - SCRAPE_TIMEOUT=${SCRAPE_TIMEOUT:-15}
+
+networks:
+  sandbox-net:
+    name: ${USER}-docx-engineer-sandbox-net
+    internal: true
 
