@@ -86,6 +86,9 @@ def _job_resp(job: Job) -> dict:
         "question": job.question,
         "diff": job.diff,
         "last_error": job.last_error,
+        "attempt": job.attempt,
+        "attempt_error": job.attempt_error,
+        "max_attempts": MAX_ATTEMPTS,
     }
 
 
@@ -168,6 +171,8 @@ async def refine_job(
     job.output_path = None
     job.diff = None
     job.last_error = None
+    job.attempt = 0
+    job.attempt_error = None
 
     background_tasks.add_task(_run_agent_loop, job.id, False)
     return _job_resp(job)
@@ -198,6 +203,8 @@ async def answer_job(
         job.clarifications.append((job.question, answer))
     job.question = None
     job.status = "running"
+    job.attempt = 0
+    job.attempt_error = None
 
     background_tasks.add_task(_run_agent_loop, job.id)
     return _job_resp(job)
@@ -253,7 +260,9 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
 
 
 def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None:
+    job.attempt_error = None
     for _attempt in range(MAX_ATTEMPTS):
+        job.attempt = _attempt + 1
         log.debug("Job %s attempt %d/%d start", job_id, _attempt + 1, MAX_ATTEMPTS)
 
         try:
@@ -276,26 +285,34 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
                   job_id, _attempt + 1, result.get("success"), result.get("error"))
 
         if not result["success"]:
-            job.history.append((script, f"Script crashed: {result.get('error', 'unknown')}"))
+            msg = f"Script crashed: {result.get('error', 'unknown')}"
+            job.history.append((script, msg))
+            job.attempt_error = msg
             continue
 
         output_path = str(out_dir / "out.docx")
         file_exists = Path(output_path).exists()
         log.debug("Job %s attempt %d output file exists: %s", job_id, _attempt + 1, file_exists)
         if not file_exists:
-            job.history.append((script, "Script completed but produced no output file"))
+            msg = "Script completed but produced no output file"
+            job.history.append((script, msg))
+            job.attempt_error = msg
             continue
 
         try:
             diff = docx_inspect.compute_diff(job.input_path, output_path)
         except Exception as e:
             log.exception("Job %s attempt %d compute_diff failed", job_id, _attempt + 1)
-            job.history.append((script, f"Output file unreadable: {e}"))
+            msg = f"Output file unreadable: {e}"
+            job.history.append((script, msg))
+            job.attempt_error = msg
             continue
 
         log.debug("Job %s attempt %d diff: total=%d changed=%d", job_id, _attempt + 1, diff["total"], diff["changed"])
         if diff["changed"] == 0:
-            job.history.append((script, "Script ran but made no changes to the document"))
+            msg = "Script ran but made no changes to the document"
+            job.history.append((script, msg))
+            job.attempt_error = msg
             continue
 
         job.output_path = output_path

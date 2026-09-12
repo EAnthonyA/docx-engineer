@@ -2,7 +2,7 @@
 
 Upload a `.docx`, describe the edit in plain language, get back a modified file.
 
-A model-agnostic AI client (DeepSeek by default, Gemini optional) generates a `python-docx` script. The script runs in a hardened Docker sandbox (no network, no filesystem, all capabilities dropped). You review a before/after diff, then download.
+A DeepSeek-powered AI client generates a `python-docx` script. The script runs in a hardened Docker sandbox (no network, no filesystem, all capabilities dropped). You review a before/after diff, then download.
 
 ## How it works
 
@@ -21,7 +21,7 @@ A model-agnostic AI client (DeepSeek by default, Gemini optional) generates a `p
 | Backend | FastAPI (Python) |
 | Executor | FastAPI — only service with `docker.sock` |
 | Sandbox | `python:3.12-slim` + `python-docx`, non-root |
-| AI | DeepSeek (`deepseek-v4-pro`) or Gemini — see `AI_PROVIDER` |
+| AI | DeepSeek (`deepseek-v4-pro`) |
 
 ## Local dev
 
@@ -29,7 +29,7 @@ A model-agnostic AI client (DeepSeek by default, Gemini optional) generates a `p
 
 ```bash
 cp .env.example .env
-# Add DEEPSEEK_API_KEY to .env (or GEMINI_API_KEY + set AI_PROVIDER=gemini)
+# Add DEEPSEEK_API_KEY to .env
 
 make sandbox    # build sandbox image (required)
 make build      # build all dev images
@@ -54,14 +54,11 @@ make test-sandbox
 
 | Variable | Required | Description |
 |---|---|---|
-| `AI_PROVIDER` | No | `deepseek` (default) or `gemini` |
-| `DEEPSEEK_API_KEY` | Yes* | From [DeepSeek Platform](https://platform.deepseek.com/) — *required when `AI_PROVIDER=deepseek` |
+| `DEEPSEEK_API_KEY` | Yes | From [DeepSeek Platform](https://platform.deepseek.com/) |
 | `DEEPSEEK_MODEL` | No | Override model (default: `deepseek-v4-pro`) |
-| `GEMINI_API_KEY` | Yes* | From [Google AI Studio](https://ai.google.dev/) — *required when `AI_PROVIDER=gemini` |
 | `SESSION_SECRET` | Yes (prod) | Long random string for cookie signing |
 | `ADMIN_PASSWORD` | Dev only | Plaintext password (default: `admin`) |
 | `ADMIN_PASSWORD_HASH` | Prod | Bcrypt hash — generate with `make hash-password` |
-| `GEMINI_MODEL` | No | Override Gemini model (default: `gemini-2.5-flash-lite`) |
 | `SANDBOX_MEMORY` | No | Sandbox container memory limit (default `1g`; dev compose sets `1536m`) |
 | `CORS_ORIGINS` | Prod | Comma-separated allowed origins |
 

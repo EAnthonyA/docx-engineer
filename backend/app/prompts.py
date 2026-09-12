@@ -1,10 +1,10 @@
-import logging
-import os
+"""Shared prompt contract for the LLM provider.
+
+The system prompts, fence stripping, and the clarifications block live here so
+there is exactly one copy of the prompt contract.
+"""
+
 import re
-
-import google.generativeai as genai
-
-log = logging.getLogger("gemini")
 
 _SYSTEM_PROMPT = """\
 You are a Python code generator for .docx manipulation.
@@ -18,7 +18,8 @@ Emit exactly ONE function with this exact signature:
 - `doc` is a loaded python-docx Document. Do NOT call Document() or doc.save() — the sandbox handles that.
 - `tools` is a DocxTools helper with the API documented below. Use it for all common operations.
 - No imports are needed for most edits. If you must import, only `from docx import ...` is allowed.
-- Do NOT use: os, sys, subprocess, socket, shutil, open(), eval, exec, requests.
+- Do NOT use: os, sys, subprocess, socket, shutil, open(), eval, exec, requests, urllib.
+- Network access is available ONLY through tools.scrape(url). Never import requests/urllib/socket.
 - Handle edge cases gracefully (empty paragraphs, missing runs, None values).
 
 TOOLS API:
@@ -55,6 +56,11 @@ tools.set_format(target, *, bold=None, italic=None, underline=None, color=None, 
 tools.set_style(paragraph, name)
     Set paragraph style by name. No-op if style doesn't exist.
 
+tools.scrape(url, *, timeout=30) -> str
+    Fetch a web page and return its raw HTML as a string. This is the ONLY way
+    to access the network. Raises RuntimeError if the fetch fails. Call it once
+    per unique URL and cache the result in a local dict — never re-fetch.
+
 EXAMPLES:
 
 # Replace a placeholder everywhere in the document
@@ -80,6 +86,15 @@ def edit(doc, tools):
 def edit(doc, tools):
     tools.format_tagged(doc, r"<B>(.*?)<D>", bold=True)
 
+# Fetch a page once and use its raw HTML (cache to avoid re-fetching)
+def edit(doc, tools):
+    import re
+    html = tools.scrape("https://example.com/page")
+    for m in re.finditer(r"<p>(.*?)</p>", html, re.S):
+        text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+        if text:
+            tools.replace_text(doc, "{{INSERT}}", text)
+
 RULES:
 - Prefer tools methods. They are single-pass, fast, and run-boundary-safe.
 - For tag→format tasks (remove markup, style content inside), ALWAYS use tools.format_tagged. Never write your own run loops.
@@ -101,14 +116,8 @@ or in previous answers.\
 """
 
 
-def _model():
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    genai.configure(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
-    return genai.GenerativeModel(model_name, system_instruction=_SYSTEM_PROMPT)
-
-
 def _strip_fences(text: str) -> str:
+    """Remove markdown code fences (with optional ``python`` tag) around text."""
     text = text.strip()
     text = re.sub(r"^```(?:python)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
@@ -116,6 +125,7 @@ def _strip_fences(text: str) -> str:
 
 
 def _clarifications_block(clarifications) -> str:
+    """Build the 'already asked and answered' prompt block, or empty string."""
     if not clarifications:
         return ""
     lines = ["\nCLARIFICATIONS (already asked and answered):"]
@@ -123,57 +133,3 @@ def _clarifications_block(clarifications) -> str:
         lines.append(f"Q: {q}")
         lines.append(f"A: {a}")
     return "\n".join(lines)
-
-
-def generate_script(instruction: str, doc_summary: str, history: list, clarifications: list | None = None) -> str:
-    """Call Gemini to produce a transform() function. Returns raw Python source."""
-    parts = [
-        f"DOCUMENT STRUCTURE:\n{doc_summary}",
-        f"\nUSER INSTRUCTION:\n{instruction}",
-    ]
-
-    block = _clarifications_block(clarifications)
-    if block:
-        parts.append(block)
-
-    if history:
-        parts.append("\nPREVIOUS ATTEMPTS — learn from these failures:")
-        for i, (script, outcome) in enumerate(history, 1):
-            parts.append(f"\nAttempt {i} script:\n{script}")
-            parts.append(f"Attempt {i} outcome: {outcome}")
-
-    parts.append("\nWrite the transform function now:")
-    prompt = "\n".join(parts)
-
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
-    log.info("Gemini request — model=%s attempt=%d instruction=%r", model_name, len(history) + 1, instruction)
-    log.debug("Gemini prompt:\n%s", prompt)
-
-    response = _model().generate_content(prompt)
-    script = _strip_fences(response.text)
-
-    log.debug("Gemini response — %d chars", len(script))
-    log.debug("Gemini script:\n%s", script)
-
-    return script
-
-
-def ask_clarification(instruction: str, doc_summary: str, clarifications: list | None = None) -> str | None:
-    """Return a clarifying question if the instruction is ambiguous, else None."""
-    parts = [
-        f"DOCUMENT STRUCTURE:\n{doc_summary}",
-        f"\nUSER INSTRUCTION:\n{instruction}",
-    ]
-    block = _clarifications_block(clarifications)
-    if block:
-        parts.append(block)
-    parts.append("\nReply with CLEAR, or ask your question(s):")
-    prompt = "\n".join(parts)
-
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
-    model = genai.GenerativeModel(model_name, system_instruction=_CLARIFY_SYSTEM)
-    text = _strip_fences(model.generate_content(prompt).text).strip()
-
-    if text.upper().replace(".", "").strip() == "CLEAR":
-        return None
-    return text

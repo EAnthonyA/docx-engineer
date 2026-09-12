@@ -7,7 +7,12 @@ word across multiple Run objects, so naive `run.text.replace(...)` silently
 misses matches that span runs. Every method here handles that correctly.
 """
 
+import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
+
 from docx.shared import Pt, RGBColor
 from docx.oxml.ns import qn
 
@@ -403,3 +408,29 @@ class DocxTools:
             paragraph.style = name
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Web scraping (proxied through the isolated scraper sidecar)
+    # ------------------------------------------------------------------
+
+    def scrape(self, url: str, *, timeout: float = 30) -> str:
+        """
+        Fetch a web page and return its raw HTML as a string.
+
+        This is the ONLY way a script can access the network. The request goes
+        to a scraper sidecar that blocks private/internal addresses. Returns
+        the raw HTML body; raises RuntimeError with a clear message on failure.
+        """
+        base = os.environ.get("SCRAPER_URL", "http://scraper:8000").rstrip("/")
+        target = f"{base}/fetch?url={urllib.parse.quote(url, safe='')}"
+        req = urllib.request.Request(
+            target, headers={"User-Agent": "docx-engineer-scraper/1.0"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"Scrape failed with HTTP {e.code}: {detail}") from e
+        except Exception as e:
+            raise RuntimeError(f"Scrape failed: {e}") from e

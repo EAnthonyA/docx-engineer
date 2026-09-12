@@ -21,6 +21,8 @@ class Job:
     last_script: str | None = None
     question: str | None = None
     clarifications: list = field(default_factory=list)  # [(question, answer), ...]
+    attempt: int = 0
+    attempt_error: str | None = None
     created_at: float = field(default_factory=time.time)
 
 
