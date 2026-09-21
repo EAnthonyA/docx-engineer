@@ -64,11 +64,8 @@ make test-sandbox
 
 ## Production deploy
 
-CI/CD via GitHub Actions — pushes to `main` build and deploy automatically.
-
-Set `ADMIN_PASSWORD_HASH` (bcrypt) instead of plaintext `ADMIN_PASSWORD`. Generate with:
-```bash
-make hash-password
-```
-
-App runs on port `8080`. Put Cloudflare or nginx in front for TLS.
+Run **Build and deploy to VPS** from the `main` branch in GitHub Actions. The
+workflow builds and deploys all four images tagged with that commit's SHA, then
+checks the backend and the `sangri.tech` route through the shared nginx proxy.
+For a manual Compose command on the VPS, set `IMAGE_TAG` to a commit SHA whose
+images have been built and pushed.

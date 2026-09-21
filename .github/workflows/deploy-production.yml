@@ -1,0 +1,31 @@
+name: Build and deploy to VPS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-frontend:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-push-frontend.yml
+    secrets: inherit
+
+  build-backend:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-push-backend.yml
+    secrets: inherit
+
+  build-executor:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-push-executor.yml
+    secrets: inherit
+
+  build-sandbox:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-push-sandbox.yml
+    secrets: inherit
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: [build-frontend, build-backend, build-executor, build-sandbox]
+    uses: ./.github/workflows/deploy-vps.yml
+    secrets: inherit
