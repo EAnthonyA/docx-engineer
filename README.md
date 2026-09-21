@@ -64,8 +64,9 @@ make test-sandbox
 
 ## Production deploy
 
-Run **Build and deploy to VPS** from the `main` branch in GitHub Actions. The
-workflow builds and deploys all four images tagged with that commit's SHA, then
-checks the backend and the `sangri.tech` route through the shared nginx proxy.
+Pushes to `main` build and deploy after the CI checks pass. You can also run
+**Build and deploy to VPS** manually from the `main` branch in GitHub Actions.
+The workflow builds and deploys all four images tagged with that commit's SHA,
+then checks the backend and the `sangri.tech` route through the shared nginx proxy.
 For a manual Compose command on the VPS, set `IMAGE_TAG` to a commit SHA whose
 images have been built and pushed.
