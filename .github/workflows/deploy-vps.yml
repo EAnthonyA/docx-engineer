@@ -17,7 +17,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script: mkdir -p ~/docx-engineer/nginx/certs ~/lazyfood/nginx/conf.d
+          script: mkdir -p ~/docx-engineer ~/lazyfood/nginx/conf.d/certs
 
       - name: Copy compose file to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -36,15 +36,6 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           source: nginx/conf.d/docx-engineer.conf
           target: ~/lazyfood
-
-      - name: Copy HTTPS proxy configuration
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          source: nginx/tls-proxy.conf
-          target: ~/docx-engineer
 
       - name: Deploy
         uses: appleboy/ssh-action@v1.0.3
@@ -70,9 +61,9 @@ jobs:
             test -n "$CLOUDFLARE_ORIGIN_CERT_B64"
             test -n "$CLOUDFLARE_ORIGIN_KEY_B64"
             umask 077
-            printf '%s' "$CLOUDFLARE_ORIGIN_CERT_B64" | base64 -d > nginx/certs/sangri.tech.pem
-            printf '%s' "$CLOUDFLARE_ORIGIN_KEY_B64" | base64 -d > nginx/certs/sangri.tech.key
-            chmod 600 nginx/certs/sangri.tech.key
+            printf '%s' "$CLOUDFLARE_ORIGIN_CERT_B64" | base64 -d > ~/lazyfood/nginx/conf.d/certs/sangri.tech.pem
+            printf '%s' "$CLOUDFLARE_ORIGIN_KEY_B64" | base64 -d > ~/lazyfood/nginx/conf.d/certs/sangri.tech.key
+            chmod 600 ~/lazyfood/nginx/conf.d/certs/sangri.tech.key
 
             docker network create shared-proxy || true
 
@@ -83,12 +74,10 @@ jobs:
 
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            docker compose -f docker-compose.prod.yml exec -T tls-proxy nginx -t
-            docker compose -f docker-compose.prod.yml exec -T tls-proxy nginx -s reload
             docker exec lazyfood-nginx-prod nginx -t
             docker exec lazyfood-nginx-prod nginx -s reload
 
-            # Check the backend and the same HTTPS hostname route visitors use.
+            # Check the backend and its HTTPS route through the shared proxy.
             for i in $(seq 1 10); do
               if docker compose -f docker-compose.prod.yml exec -T backend \
                 python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)" \

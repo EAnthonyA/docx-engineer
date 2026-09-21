@@ -1,20 +1,4 @@
 services:
-  tls-proxy:
-    image: nginx:1.27-alpine
-    ports:
-      - "443:443"
-    volumes:
-      - ./nginx/tls-proxy.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-    depends_on:
-      - frontend
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 64m
-          cpus: "0.25"
-
   frontend:
     image: ${DOCKERHUB_USERNAME}/docx-engineer:frontend-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
     container_name: docx-engineer-frontend
