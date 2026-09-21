@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: ${DOCKERHUB_USERNAME}/docx-engineer:frontend
+    image: ${DOCKERHUB_USERNAME}/docx-engineer:frontend-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
     container_name: docx-engineer-frontend
     expose:
       - "80"
@@ -17,7 +17,7 @@ services:
           cpus: "0.5"
 
   backend:
-    image: ${DOCKERHUB_USERNAME}/docx-engineer:backend
+    image: ${DOCKERHUB_USERNAME}/docx-engineer:backend-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
     restart: unless-stopped
     volumes:
       - jobs_data:/jobs
@@ -39,14 +39,14 @@ services:
           cpus: "1"
 
   executor:
-    image: ${DOCKERHUB_USERNAME}/docx-engineer:executor
+    image: ${DOCKERHUB_USERNAME}/docx-engineer:executor-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - jobs_data:/jobs
     environment:
       - JOBS_DIR=/jobs
-      - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox
+      - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
       - SANDBOX_TIMEOUT=30
       - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1g}
     deploy:

@@ -61,3 +61,11 @@ make test-sandbox
 | `ADMIN_PASSWORD_HASH` | Prod | Bcrypt hash — generate with `make hash-password` |
 | `SANDBOX_MEMORY` | No | Sandbox container memory limit (default `1g`; dev compose sets `1536m`) |
 | `CORS_ORIGINS` | Prod | Comma-separated allowed origins |
+
+## Production deploy
+
+Run **Build and deploy to VPS** from the `main` branch in GitHub Actions. The
+workflow builds and deploys all four images tagged with that commit's SHA, then
+checks the backend and the `sangri.tech` route through the shared nginx proxy.
+For a manual Compose command on the VPS, set `IMAGE_TAG` to a commit SHA whose
+images have been built and pushed.
