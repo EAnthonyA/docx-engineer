@@ -17,7 +17,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script: mkdir -p ~/docx-engineer ~/lazyfood/nginx/conf.d
+          script: mkdir -p ~/docx-engineer/nginx/certs ~/lazyfood/nginx/conf.d
 
       - name: Copy compose file to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -37,6 +37,15 @@ jobs:
           source: nginx/conf.d/docx-engineer.conf
           target: ~/lazyfood
 
+      - name: Copy HTTPS proxy configuration
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: nginx/tls-proxy.conf
+          target: ~/docx-engineer
+
       - name: Deploy
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -47,14 +56,23 @@ jobs:
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
+          CLOUDFLARE_ORIGIN_CERT_B64: ${{ secrets.CLOUDFLARE_ORIGIN_CERT_B64 }}
+          CLOUDFLARE_ORIGIN_KEY_B64: ${{ secrets.CLOUDFLARE_ORIGIN_KEY_B64 }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,ADMIN_PASSWORD_HASH,SESSION_SECRET,DEEPSEEK_API_KEY,CORS_ORIGINS
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,ADMIN_PASSWORD_HASH,SESSION_SECRET,DEEPSEEK_API_KEY,CORS_ORIGINS,CLOUDFLARE_ORIGIN_CERT_B64,CLOUDFLARE_ORIGIN_KEY_B64
           script: |
             set -e
             cd ~/docx-engineer
+
+            test -n "$CLOUDFLARE_ORIGIN_CERT_B64"
+            test -n "$CLOUDFLARE_ORIGIN_KEY_B64"
+            umask 077
+            printf '%s' "$CLOUDFLARE_ORIGIN_CERT_B64" | base64 -d > nginx/certs/sangri.tech.pem
+            printf '%s' "$CLOUDFLARE_ORIGIN_KEY_B64" | base64 -d > nginx/certs/sangri.tech.key
+            chmod 600 nginx/certs/sangri.tech.key
 
             docker network create shared-proxy || true
 
