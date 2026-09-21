@@ -61,14 +61,3 @@ make test-sandbox
 | `ADMIN_PASSWORD_HASH` | Prod | Bcrypt hash — generate with `make hash-password` |
 | `SANDBOX_MEMORY` | No | Sandbox container memory limit (default `1g`; dev compose sets `1536m`) |
 | `CORS_ORIGINS` | Prod | Comma-separated allowed origins |
-
-## Production deploy
-
-CI/CD via GitHub Actions — pushes to `main` build and deploy automatically.
-
-Set `ADMIN_PASSWORD_HASH` (bcrypt) instead of plaintext `ADMIN_PASSWORD`. Generate with:
-```bash
-make hash-password
-```
-
-App runs on port `8080`. Put Cloudflare or nginx in front for TLS.

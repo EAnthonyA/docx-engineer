@@ -2,12 +2,21 @@ name: Deploy to VPS
 
 on:
   workflow_call:
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Create directories on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: mkdir -p ~/docx-engineer ~/lazyfood/nginx/conf.d
 
       - name: Copy compose file to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -18,39 +27,50 @@ jobs:
           source: docker-compose.prod.yml
           target: ~/docx-engineer
 
-      - name: Deploy
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Copy nginx vhost to shared proxy
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          source: nginx/conf.d/docx-engineer.conf
+          target: ~/lazyfood
+
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          ADMIN_PASSWORD_HASH: ${{ secrets.ADMIN_PASSWORD_HASH }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,ADMIN_PASSWORD_HASH,SESSION_SECRET,DEEPSEEK_API_KEY,CORS_ORIGINS
           script: |
             set -e
             cd ~/docx-engineer
 
             docker network create shared-proxy || true
 
-            # Write .env from secrets
-            cat > .env <<EOF
-            DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
-            ADMIN_PASSWORD_HASH=${{ secrets.ADMIN_PASSWORD_HASH }}
-            SESSION_SECRET=${{ secrets.SESSION_SECRET }}
-            DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
-            CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
-            EOF
-
-            docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
+            printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
             # Pull sandbox image on VPS so executor can use it
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/docx-engineer:sandbox
+            docker pull "$DOCKERHUB_USERNAME/docx-engineer:sandbox"
 
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker exec lazyfood-nginx-prod nginx -t
+            docker exec lazyfood-nginx-prod nginx -s reload
             docker image prune -f
 
-            # Health check
+            # Check the backend itself; the frontend serves index.html for /health.
             for i in $(seq 1 10); do
-              if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+              if docker compose -f docker-compose.prod.yml exec -T backend \
+                python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"; then
                 echo "Health check passed"
                 exit 0
               fi

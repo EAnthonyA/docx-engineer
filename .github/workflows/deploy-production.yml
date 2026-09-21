@@ -1,0 +1,26 @@
+name: Build and deploy to VPS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-frontend:
+    uses: ./.github/workflows/build-push-frontend.yml
+    secrets: inherit
+
+  build-backend:
+    uses: ./.github/workflows/build-push-backend.yml
+    secrets: inherit
+
+  build-executor:
+    uses: ./.github/workflows/build-push-executor.yml
+    secrets: inherit
+
+  build-sandbox:
+    uses: ./.github/workflows/build-push-sandbox.yml
+    secrets: inherit
+
+  deploy:
+    needs: [build-frontend, build-backend, build-executor, build-sandbox]
+    uses: ./.github/workflows/deploy-vps.yml
+    secrets: inherit
