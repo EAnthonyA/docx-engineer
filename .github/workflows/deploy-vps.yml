@@ -83,14 +83,16 @@ jobs:
 
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker compose -f docker-compose.prod.yml exec -T tls-proxy nginx -t
+            docker compose -f docker-compose.prod.yml exec -T tls-proxy nginx -s reload
             docker exec lazyfood-nginx-prod nginx -t
             docker exec lazyfood-nginx-prod nginx -s reload
 
-            # Check the backend and the same hostname route visitors use.
+            # Check the backend and the same HTTPS hostname route visitors use.
             for i in $(seq 1 10); do
               if docker compose -f docker-compose.prod.yml exec -T backend \
                 python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)" \
-                && curl -fsS --max-time 5 -H 'Host: sangri.tech' http://127.0.0.1/ -o /tmp/docx-deploy-response \
+                && curl -kfsS --max-time 5 --resolve sangri.tech:443:127.0.0.1 https://sangri.tech/ -o /tmp/docx-deploy-response \
                 && grep -Fq '<title>docx-engineer</title>' /tmp/docx-deploy-response; then
                 echo "Health check passed"
                 docker image prune -f
