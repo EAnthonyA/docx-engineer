@@ -19,7 +19,9 @@ from .jobs import (
     JOBS_DIR,
     Job,
     add_conversation_message,
+    archive_finished_job_documents,
     create_job,
+    discard_job_documents,
     get_job,
     list_jobs,
     recover_interrupted_jobs,
@@ -141,6 +143,9 @@ async def create_new_job(
     if len(instruction) > MAX_INSTRUCTION_LEN:
         raise HTTPException(400, f"Instruction too long (max {MAX_INSTRUCTION_LEN} characters)")
 
+    # Histories intentionally retain messages, not Word documents.  Starting
+    # another task retires files from completed or failed tasks.
+    archive_finished_job_documents()
     job = create_job(instruction)
     Path(job.input_path).write_bytes(content)
 
@@ -175,6 +180,19 @@ def download_result(job_id: str, _: bool = Depends(verify_session)):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename="result.docx",
     )
+
+
+@app.post("/api/jobs/{job_id}/complete")
+def complete_job(job_id: str, _: bool = Depends(verify_session)):
+    """Explicitly finish a reviewed job and retain its chat record only."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "needs_review":
+        raise HTTPException(400, "Job cannot be completed in its current state")
+
+    discard_job_documents(job)
+    return _job_resp(job)
 
 
 class RefineRequest(BaseModel):

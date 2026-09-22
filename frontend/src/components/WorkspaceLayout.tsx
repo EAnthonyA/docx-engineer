@@ -38,7 +38,7 @@ export default function WorkspaceLayout({ children }: { children: ReactNode }) {
         <div className="sidebar-heading">Ankstesni pokalbiai</div>
         <nav className="sidebar-history" aria-label="Ankstesni dokumentai">
           {jobs?.length ? jobs.slice(0, 30).map((job) => {
-            const isActive = job.status === 'running' || job.status === 'needs_clarification'
+            const isActive = job.status === 'running' || job.status === 'needs_clarification' || job.has_result
             const destination = isActive ? `/jobs/${job.id}` : `/istorija/${job.id}`
             const active = location.pathname === destination
             return (
@@ -56,7 +56,6 @@ export default function WorkspaceLayout({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="sidebar-footer">
-          <button className="sidebar-link" onClick={() => navigate('/istorija')}>Visi dokumentai</button>
           <button className="sidebar-link" onClick={logout}>Atsijungti</button>
         </div>
       </aside>

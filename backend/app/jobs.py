@@ -77,6 +77,46 @@ def save_job(job: Job) -> None:
     temp_path.replace(metadata_path)
 
 
+def discard_job_documents(job: Job) -> None:
+    """Keep the conversation record but remove a job's working documents.
+
+    Job directories are also used by the sandbox, so only files under the
+    job's own validated directory are removed.  The compact JSON record stays
+    in place for the history UI.
+    """
+    if not _is_valid_job_id(job.id):
+        return
+
+    job_dir = JOBS_DIR / job.id
+    (job_dir / "in.docx").unlink(missing_ok=True)
+    (job_dir / "script.py").unlink(missing_ok=True)
+    shutil.rmtree(job_dir / "out", ignore_errors=True)
+
+    # Do not retain document-derived data or generated code in chat history.
+    job.input_path = ""
+    job.output_path = None
+    job.diff = None
+    job.history.clear()
+    job.last_script = None
+    job.attempt_error = None
+    if job.status == "needs_review":
+        job.status = "done"
+        set_job_stage(job, "archived", "Pokalbis išsaugotas; dokumento failai pašalinti")
+    save_job(job)
+
+
+def archive_finished_job_documents() -> list[str]:
+    """Remove files for finished jobs, preserving their chat-only history."""
+    archived = []
+    for metadata_path in JOBS_DIR.glob("*/job.json"):
+        job = get_job(metadata_path.parent.name)
+        if not job or job.status not in ("needs_review", "stuck"):
+            continue
+        discard_job_documents(job)
+        archived.append(job.id)
+    return archived
+
+
 def set_job_stage(job: Job, stage: str, detail: str) -> None:
     """Record a user-safe lifecycle event, retaining a short useful history."""
     now = time.time()

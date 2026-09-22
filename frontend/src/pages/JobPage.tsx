@@ -69,6 +69,14 @@ export default function JobPage() {
     },
   })
 
+  const completeJob = useMutation({
+    mutationFn: () => api.completeJob(jobId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['job-history'] })
+      navigate('/')
+    },
+  })
+
   if (error) {
     return (
       <div className="page job-page">
@@ -228,8 +236,24 @@ export default function JobPage() {
     )
   }
 
+  if (job.status === 'done' || !job.diff) {
+    return (
+      <div className="page job-page">
+        <div className="stuck-page">
+          <h2>Dokumentas atsisiųstas</h2>
+          <p>
+            Failas išsaugotas Jūsų įrenginyje. Serverio kopija pašalinta, o pokalbis liko tik peržiūrai.
+          </p>
+          <button className="btn btn--primary" onClick={() => navigate('/')}>
+            Pasirinkti naują dokumentą
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   // needs_review
-  const diff = job.diff!
+  const diff = job.diff
   return (
     <div className="page job-page">
       <main className="main-content">
@@ -239,6 +263,11 @@ export default function JobPage() {
             <p className="diff-meta">
               Iš viso pastraipų: {diff.total} &middot; <strong>Pakeista: {diff.changed}</strong>
             </p>
+            <p className="diff-meta">
+              Pirmasis variantas paruoštas. Dešinėje matote, kaip atrodys dokumentas po pakeitimų.
+              Jei viskas gerai, atsisiųskite failą ir pasirinkite „Baigti ir pašalinti failus“; jei ne, spauskite
+              „Reikia dar vieno pakeitimo“.
+            </p>
           </div>
 
           <div className="diff-actions">
@@ -247,7 +276,7 @@ export default function JobPage() {
               className="btn btn--primary"
               download="pataisytas-dokumentas.docx"
             >
-              Atsisiųsti sutvarkytą dokumentą
+              Atsisiųsti ir peržiūrėti
             </a>
             <button
               className="btn btn--secondary"
@@ -259,6 +288,17 @@ export default function JobPage() {
             >
               {showRefine ? 'Uždaryti' : 'Reikia dar vieno pakeitimo'}
             </button>
+            <button
+              className="btn btn--ghost"
+              disabled={completeJob.isPending}
+              onClick={() => {
+                if (window.confirm('Dokumento failai bus pašalinti iš serverio. Pokalbis liks tik peržiūrai.')) {
+                  completeJob.mutate()
+                }
+              }}
+            >
+              {completeJob.isPending ? 'Šalinama…' : 'Baigti ir pašalinti failus'}
+            </button>
             <button className="btn btn--ghost" onClick={() => navigate('/')}>
               Naujas dokumentas
             </button>
@@ -267,6 +307,7 @@ export default function JobPage() {
           {showRefine && (
             <div className="refine-panel">
               <h3>Kas dar turėtų būti pakeista?</h3>
+              <p>Atsisiųstas dokumentas laikinai lieka serveryje, kol paprašysite papildomo pakeitimo arba užbaigsite užduotį.</p>
               <textarea
                 className="textarea"
                 rows={3}
