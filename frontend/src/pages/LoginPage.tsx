@@ -16,7 +16,7 @@ export default function LoginPage() {
       navigate('/', { replace: true })
     },
     onError: () => {
-      setError('Wrong password. Try again.')
+      setError('Slaptažodis netinka. Bandykite dar kartą.')
     },
   })
 
@@ -30,11 +30,11 @@ export default function LoginPage() {
     <div className="login-page">
       <div className="card login-card">
         <div className="login-logo">docx-engineer</div>
-        <div className="login-tagline">Word documents, handled.</div>
+        <div className="login-tagline">Ramus ir paprastas būdas sutvarkyti Word dokumentus.</div>
 
         <form onSubmit={handleSubmit} className="stack">
           <div className="field">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">Slaptažodis</label>
             <input
               id="password"
               type="password"
@@ -54,7 +54,7 @@ export default function LoginPage() {
             className="btn btn--primary"
             disabled={login.isPending || !password}
           >
-            {login.isPending ? 'Logging in…' : 'Log in'}
+            {login.isPending ? 'Jungiamasi…' : 'Prisijungti'}
           </button>
         </form>
       </div>

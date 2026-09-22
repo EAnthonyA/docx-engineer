@@ -1,4 +1,4 @@
-import type { Job } from './types'
+import type { Job, JobSummary } from './types'
 
 class ApiError extends Error {
   constructor(
@@ -60,6 +60,10 @@ export const api = {
 
   getJob(jobId: string) {
     return request<Job>(`/api/jobs/${jobId}`)
+  },
+
+  listJobs() {
+    return request<JobSummary[]>('/api/jobs')
   },
 
   refineJob(jobId: string, note: string) {

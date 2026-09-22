@@ -38,7 +38,9 @@ export default function JobPage() {
   const { data: job, error } = useQuery({
     queryKey: ['job', jobId],
     queryFn: () => api.getJob(jobId!),
-    refetchInterval: (query) => (query.state.data?.status === 'running' ? 2000 : false),
+    // Job stages are persisted and displayed, so polling does not need to be
+    // noisy. Six seconds keeps the page responsive while cutting requests by 3x.
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? 6000 : false),
     enabled: !!jobId,
   })
 
@@ -50,7 +52,8 @@ export default function JobPage() {
       qc.invalidateQueries({ queryKey: ['job', jobId] })
     },
     onError: (e) => {
-      setRefineError((e as Error).message)
+      console.error('Nepavyko pakartoti dokumento tvarkymo:', e)
+      setRefineError('Nepavyko pradėti naujo bandymo. Pabandykite dar kartą po akimirkos.')
     },
   })
 
@@ -61,39 +64,19 @@ export default function JobPage() {
       qc.invalidateQueries({ queryKey: ['job', jobId] })
     },
     onError: (e) => {
-      setAnswerError((e as Error).message)
+      console.error('Nepavyko išsiųsti atsakymo:', e)
+      setAnswerError('Atsakymo išsiųsti nepavyko. Pabandykite dar kartą.')
     },
   })
 
-  function handleLogout() {
-    api.logout().then(() => {
-      qc.clear()
-      navigate('/login', { replace: true })
-    })
-  }
-
-  const header = (
-    <header className="header">
-      <div className="container header__inner">
-        <a className="logo" href="/" style={{ textDecoration: 'none' }}>
-          docx-engineer
-        </a>
-        <button className="btn btn--ghost" onClick={handleLogout}>
-          Log out
-        </button>
-      </div>
-    </header>
-  )
-
   if (error) {
     return (
-      <div className="page">
-        {header}
+      <div className="page job-page">
         <div className="stuck-page">
-          <h2>Job not found</h2>
-          <p>This job may have expired. Upload your document again to start fresh.</p>
+          <h2>Šio dokumento užduoties rasti nepavyko</h2>
+          <p>Gali būti, kad ankstesnė užduotis jau nebegalioja. Pasirinkite dokumentą dar kartą ir pradėkime iš naujo.</p>
           <button className="btn btn--primary" onClick={() => navigate('/')}>
-            Start over
+            Pradėti iš naujo
           </button>
         </div>
       </div>
@@ -104,10 +87,9 @@ export default function JobPage() {
     const questions = splitQuestions(job.question ?? '')
 
     return (
-      <div className="page">
-        {header}
+      <div className="page job-page">
         <div className="stuck-page">
-          <h2>Quick question before I start</h2>
+          <h2>Trumpas klausimas prieš pradedant</h2>
           <div
             style={{
               width: '100%',
@@ -144,7 +126,7 @@ export default function JobPage() {
                 rows={3}
                 value={answer}
                 onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Your answer(s)…"
+                placeholder="Parašykite atsakymą…"
                 autoFocus
               />
             </div>
@@ -158,10 +140,10 @@ export default function JobPage() {
                   answerJob.mutate()
                 }}
               >
-                {answerJob.isPending ? 'Sending…' : 'Continue'}
+                {answerJob.isPending ? 'Siunčiama…' : 'Tęsti'}
               </button>
               <button className="btn btn--secondary" onClick={() => navigate('/')}>
-                Start over
+                Pradėti iš naujo
               </button>
             </div>
           </div>
@@ -176,26 +158,30 @@ export default function JobPage() {
       const shortErr =
         err && err.length > 140 ? `${err.slice(0, 140)}…` : err
       return (
-        <div className="page">
-          {header}
+        <div className="page job-page">
           <LoadingSpinner
-            message={`Tweaking my approach (attempt ${job.attempt} of ${job.max_attempts})`}
+            message={`Bandome kitu būdu (${job.attempt} bandymas iš ${job.max_attempts})`}
             subtext={
               shortErr
-                ? `My first try didn't quite work: ${shortErr} I'm rewriting the script with that in mind.`
-                : `My first try didn't produce the expected changes, so I'm rewriting the script.`
+                ? 'Pirmasis bandymas nepavyko, todėl ieškome kito sprendimo. Jums nieko daryti nereikia.'
+                : 'Ieškome kito būdo atlikti pakeitimą. Jums nieko daryti nereikia.'
             }
+            detail={job.stage_detail}
+            attempt={job.attempt}
+            maxAttempts={job.max_attempts}
           />
         </div>
       )
     }
 
     return (
-      <div className="page">
-        {header}
+      <div className="page job-page">
         <LoadingSpinner
-          message="Working on it…"
-          subtext="I'm reading your document and figuring out the best way to make those changes. This usually takes 15–30 seconds."
+          message="Tvarkome Jūsų dokumentą…"
+          subtext="Dažniausiai tai užtrunka nuo pusės minutės iki minutės. Šį puslapį galite palikti atidarytą."
+          detail={job?.stage_detail ?? 'Ruošiamės pradėti'}
+          attempt={job?.attempt || undefined}
+          maxAttempts={job?.attempt ? job.max_attempts : undefined}
         />
       </div>
     )
@@ -203,19 +189,12 @@ export default function JobPage() {
 
   if (job.status === 'stuck') {
     return (
-      <div className="page">
-        {header}
+      <div className="page job-page">
         <div className="stuck-page">
-          <h2>Hmm, I got stuck</h2>
+          <h2>Šį kartą dokumento sutvarkyti nepavyko</h2>
           <p>
-            I gave it a few tries but couldn't quite get that right. Want to try describing it a
-            different way? The more specific, the better.
+            Pabandėme kelis būdus, tačiau rezultato nepavyko paruošti. Parašykite, ką norėtumėte atlikti kitaip — padės ir trumpas paaiškinimas.
           </p>
-          {job.last_error && (
-            <pre style={{ textAlign: 'left', background: '#f3f3f3', padding: '12px 16px', borderRadius: 8, fontSize: 13, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#c0392b' }}>
-              {job.last_error}
-            </pre>
-          )}
 
           <div style={{ width: '100%', maxWidth: 480 }}>
             <div className="field" style={{ marginBottom: 12 }}>
@@ -224,7 +203,7 @@ export default function JobPage() {
                 rows={4}
                 value={refineNote}
                 onChange={(e) => setRefineNote(e.target.value)}
-                placeholder="Describe the change in more detail…"
+                placeholder="Pavyzdžiui: pažymėkite visus datų paminėjimus pirmame skyriuje…"
               />
             </div>
             {refineError && <p className="error-text">{refineError}</p>}
@@ -237,10 +216,10 @@ export default function JobPage() {
                   refine.mutate()
                 }}
               >
-                {refine.isPending ? 'Trying…' : 'Try again'}
+                {refine.isPending ? 'Bandoma dar kartą…' : 'Pabandyti dar kartą'}
               </button>
               <button className="btn btn--secondary" onClick={() => navigate('/')}>
-                Start over
+                Pasirinkti kitą dokumentą
               </button>
             </div>
           </div>
@@ -252,15 +231,13 @@ export default function JobPage() {
   // needs_review
   const diff = job.diff!
   return (
-    <div className="page">
-      {header}
+    <div className="page job-page">
       <main className="main-content">
-        <div className="container">
+        <div className="content-column">
           <div className="diff-header">
-            <h2>Here's what changed</h2>
+            <h2>Dokumentas paruoštas</h2>
             <p className="diff-meta">
-              {diff.total} paragraph{diff.total !== 1 ? 's' : ''} total &middot;{' '}
-              <strong>{diff.changed} changed</strong>
+              Iš viso pastraipų: {diff.total} &middot; <strong>Pakeista: {diff.changed}</strong>
             </p>
           </div>
 
@@ -268,9 +245,9 @@ export default function JobPage() {
             <a
               href={api.downloadUrl(jobId!)}
               className="btn btn--primary"
-              download="result.docx"
+              download="pataisytas-dokumentas.docx"
             >
-              Download result
+              Atsisiųsti sutvarkytą dokumentą
             </a>
             <button
               className="btn btn--secondary"
@@ -280,22 +257,22 @@ export default function JobPage() {
                 setRefineError('')
               }}
             >
-              {showRefine ? 'Cancel' : 'Not quite — describe a fix'}
+              {showRefine ? 'Uždaryti' : 'Reikia dar vieno pakeitimo'}
             </button>
             <button className="btn btn--ghost" onClick={() => navigate('/')}>
-              New document
+              Naujas dokumentas
             </button>
           </div>
 
           {showRefine && (
             <div className="refine-panel">
-              <h3>What needs to change?</h3>
+              <h3>Kas dar turėtų būti pakeista?</h3>
               <textarea
                 className="textarea"
                 rows={3}
                 value={refineNote}
                 onChange={(e) => setRefineNote(e.target.value)}
-                placeholder="e.g. The tags are still there in paragraph 3…"
+                placeholder="Pavyzdžiui: trečioje pastraipoje dar liko žymės…"
                 autoFocus
               />
               {refineError && <p className="error-text">{refineError}</p>}
@@ -308,7 +285,7 @@ export default function JobPage() {
                     refine.mutate()
                   }}
                 >
-                  {refine.isPending ? 'Trying…' : 'Re-run with this fix'}
+                  {refine.isPending ? 'Tvarkoma…' : 'Pataisyti dokumentą'}
                 </button>
               </div>
             </div>
