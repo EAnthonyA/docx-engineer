@@ -314,6 +314,54 @@ body {
   margin-bottom: 32px;
 }
 
+/* ---- Not found ---- */
+.not-found-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    linear-gradient(90deg, transparent 49.9%, rgba(77, 158, 14, 0.08) 50%, transparent 50.1%),
+    var(--bg);
+  background-size: 72px 72px;
+}
+
+.not-found-content {
+  width: min(100%, 540px);
+  padding: clamp(32px, 7vw, 64px) 0;
+}
+
+.not-found-code {
+  color: var(--primary);
+  font-size: clamp(72px, 19vw, 144px);
+  font-weight: 700;
+  letter-spacing: -0.09em;
+  line-height: 0.8;
+}
+
+.not-found-brand {
+  margin: 24px 0 42px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.not-found-content h1 {
+  max-width: 470px;
+  font-size: clamp(28px, 5vw, 46px);
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+}
+
+.not-found-content > p:not(.not-found-code, .not-found-brand) {
+  max-width: 410px;
+  margin: 20px 0 32px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
 /* ---- Dropzone ---- */
 .dropzone {
   border: 2px dashed var(--border);
