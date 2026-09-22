@@ -56,7 +56,6 @@ export default function WorkspaceLayout({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="sidebar-footer">
-          <button className="sidebar-link" onClick={() => navigate('/istorija')}>Visi dokumentai</button>
           <button className="sidebar-link" onClick={logout}>Atsijungti</button>
         </div>
       </aside>
