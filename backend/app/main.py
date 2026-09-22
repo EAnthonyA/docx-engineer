@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 from .auth import clear_session, create_session, verify_password, verify_session
@@ -19,7 +20,9 @@ from .jobs import (
     JOBS_DIR,
     Job,
     add_conversation_message,
+    archive_finished_job_documents,
     create_job,
+    discard_job_documents,
     get_job,
     list_jobs,
     recover_interrupted_jobs,
@@ -141,6 +144,9 @@ async def create_new_job(
     if len(instruction) > MAX_INSTRUCTION_LEN:
         raise HTTPException(400, f"Instruction too long (max {MAX_INSTRUCTION_LEN} characters)")
 
+    # Histories intentionally retain messages, not Word documents.  Starting
+    # another task retires files from completed or failed tasks.
+    archive_finished_job_documents()
     job = create_job(instruction)
     Path(job.input_path).write_bytes(content)
 
@@ -174,6 +180,8 @@ def download_result(job_id: str, _: bool = Depends(verify_session)):
         job.output_path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename="result.docx",
+        # The browser has the file at this point; keep only the chat record.
+        background=BackgroundTask(discard_job_documents, job),
     )
 
 

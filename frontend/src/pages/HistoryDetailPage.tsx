@@ -43,9 +43,6 @@ export default function HistoryDetailPage() {
               </section>
 
               <div className="conversation-page__actions">
-                {job.status === 'needs_review' && (
-                  <a className="btn btn--primary" href={api.downloadUrl(job.id)} download="pataisytas-dokumentas.docx">Atsisiųsti dokumentą</a>
-                )}
                 <button className="btn btn--secondary" onClick={() => navigate('/')}>Pasirinkti naują dokumentą</button>
               </div>
             </>

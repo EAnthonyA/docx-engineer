@@ -8,6 +8,7 @@ os.environ.setdefault("SESSION_SECRET", "test-secret")
 os.environ.setdefault("JOBS_DIR", "/tmp/docx-engineer-test-jobs")
 
 from app.main import app  # noqa: E402
+from app import jobs  # noqa: E402
 
 
 @pytest.fixture
@@ -49,3 +50,25 @@ def test_logout(client):
     assert logout.status_code == 200
     resp = client.get("/api/auth/me")
     assert resp.status_code == 401
+
+
+def test_downloading_result_archives_its_document_files(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path)
+    jobs._jobs.clear()
+    job = jobs.create_job("Make the title bold")
+    input_file = tmp_path / job.id / "in.docx"
+    output_file = tmp_path / job.id / "out" / "out.docx"
+    input_file.write_bytes(b"original")
+    output_file.write_bytes(b"result")
+    job.status = "needs_review"
+    job.output_path = str(output_file)
+    jobs.save_job(job)
+
+    assert client.post("/api/auth/login", json={"password": "testpass"}).status_code == 200
+    response = client.get(f"/api/jobs/{job.id}/download")
+
+    assert response.status_code == 200
+    assert response.content == b"result"
+    assert not input_file.exists()
+    assert not output_file.exists()
+    assert jobs.get_job(job.id).status == "done"

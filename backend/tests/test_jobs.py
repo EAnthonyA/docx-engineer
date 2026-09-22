@@ -77,3 +77,43 @@ def test_job_conversation_and_history_listing_are_persisted(tmp_path, monkeypatc
         "Pakeiskite 2023 į 2024",
         "Dokumentas paruoštas.",
     ]
+
+
+def test_finished_job_keeps_only_chat_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path)
+    jobs._jobs.clear()
+
+    job = jobs.create_job("Make the title bold")
+    job_dir = tmp_path / job.id
+    input_file = job_dir / "in.docx"
+    output_file = job_dir / "out" / "out.docx"
+    script_file = job_dir / "script.py"
+    input_file.write_bytes(b"input")
+    output_file.write_bytes(b"output")
+    script_file.write_text("print('document data')", encoding="utf-8")
+    jobs.add_conversation_message(job, "assistant", "Dokumentas paruoštas.")
+    job.status = "needs_review"
+    job.output_path = str(output_file)
+    job.diff = {"total": 1, "changed": 1, "entries": []}
+    job.history = [("print('document data')", "ok")]
+    job.last_script = "print('document data')"
+    jobs.save_job(job)
+
+    assert jobs.archive_finished_job_documents() == [job.id]
+    assert not input_file.exists()
+    assert not output_file.exists()
+    assert not script_file.exists()
+
+    jobs._jobs.clear()
+    archived = jobs.get_job(job.id)
+    assert archived is not None
+    assert archived.status == "done"
+    assert archived.input_path == ""
+    assert archived.output_path is None
+    assert archived.diff is None
+    assert archived.history == []
+    assert archived.last_script is None
+    assert [message["text"] for message in archived.conversation] == [
+        "Make the title bold",
+        "Dokumentas paruoštas.",
+    ]

@@ -14,6 +14,7 @@ function statusLabel(status: JobStatus) {
   if (status === 'needs_review') return 'Paruoštas peržiūrėti'
   if (status === 'needs_clarification') return 'Laukiama atsakymo'
   if (status === 'running') return 'Tvarkomas'
+  if (status === 'done') return 'Baigtas'
   return 'Nepavyko paruošti'
 }
 
