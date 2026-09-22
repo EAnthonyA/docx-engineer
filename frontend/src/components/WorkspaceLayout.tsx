@@ -38,12 +38,14 @@ export default function WorkspaceLayout({ children }: { children: ReactNode }) {
         <div className="sidebar-heading">Ankstesni pokalbiai</div>
         <nav className="sidebar-history" aria-label="Ankstesni dokumentai">
           {jobs?.length ? jobs.slice(0, 30).map((job) => {
-            const active = location.pathname === `/istorija/${job.id}`
+            const isActive = job.status === 'running' || job.status === 'needs_clarification'
+            const destination = isActive ? `/jobs/${job.id}` : `/istorija/${job.id}`
+            const active = location.pathname === destination
             return (
               <button
                 className={`sidebar-history__item${active ? ' sidebar-history__item--active' : ''}`}
                 key={job.id}
-                onClick={() => navigate(`/istorija/${job.id}`)}
+                onClick={() => navigate(destination)}
                 aria-current={active ? 'page' : undefined}
                 title={job.instruction}
               >
