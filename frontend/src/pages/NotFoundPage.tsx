@@ -6,13 +6,12 @@ export default function NotFoundPage() {
       <section className="not-found-content" aria-labelledby="not-found-title">
         <p className="not-found-code">404</p>
         <p className="not-found-brand">docx-engineer</p>
-        <h1 id="not-found-title">There is no document tool at this address.</h1>
+        <h1 id="not-found-title">Šio puslapio rasti nepavyko.</h1>
         <p>
-          This URL is not part of docx-engineer. If you meant to use the app,
-          sign in and start from its workspace.
+          Gali būti, kad nuoroda nebegalioja. Grįžkite į pradžią ir pradėkite nuo dokumento pasirinkimo.
         </p>
         <Link className="btn btn--primary" to="/login">
-          Go to sign in
+          Grįžti į pradžią
         </Link>
       </section>
     </main>

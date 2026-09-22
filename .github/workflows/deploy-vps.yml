@@ -17,7 +17,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          script: mkdir -p ~/docx-engineer ~/lazyfood/nginx/conf.d/certs
+          script: mkdir -p ~/docx-engineer/jobs ~/lazyfood/nginx/conf.d/certs
 
       - name: Copy compose file to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -57,6 +57,21 @@ jobs:
           script: |
             set -e
             cd ~/docx-engineer
+            # The executor starts nested Docker containers. They need the host
+            # path behind /jobs, not a path inside the executor container.
+            export JOBS_HOST_DIR="$PWD/jobs"
+            mkdir -p "$JOBS_HOST_DIR"
+
+            # One-time migration from the prior named volume. Avoid losing a
+            # recent result just because the safer nested-bind layout is being
+            # introduced. The copy is skipped once the bind directory has data.
+            if docker volume inspect docx-engineer-jobs >/dev/null 2>&1 \
+              && [ -z "$(find "$JOBS_HOST_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+              docker run --rm \
+                -v docx-engineer-jobs:/from:ro \
+                -v "$JOBS_HOST_DIR":/to \
+                alpine sh -c 'cp -a /from/. /to/'
+            fi
 
             test -n "$CLOUDFLARE_ORIGIN_CERT_B64"
             test -n "$CLOUDFLARE_ORIGIN_KEY_B64"

@@ -35,4 +35,30 @@ export interface Job {
   attempt: number
   attempt_error: string | null
   max_attempts: number
+  stage: string
+  stage_detail: string
+  stage_started_at: number
+  activity: JobActivity[]
+  conversation: ConversationMessage[]
+}
+
+export interface JobActivity {
+  at: number
+  stage: string
+  detail: string
+}
+
+export interface ConversationMessage {
+  at: number
+  role: 'user' | 'assistant'
+  text: string
+}
+
+export interface JobSummary {
+  id: string
+  instruction: string
+  status: JobStatus
+  stage_detail: string
+  created_at: number
+  has_result: boolean
 }

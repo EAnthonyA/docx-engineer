@@ -60,6 +60,7 @@ make test-sandbox
 | `ADMIN_PASSWORD` | Dev only | Plaintext password (default: `admin`) |
 | `ADMIN_PASSWORD_HASH` | Prod | Bcrypt hash — generate with `make hash-password` |
 | `SANDBOX_MEMORY` | No | Sandbox container memory limit (default `1g`; dev compose sets `1536m`) |
+| `JOBS_HOST_DIR` | Prod | Absolute host directory mounted at `/jobs`; required because the executor bind-mounts individual files into nested sandbox containers |
 | `CORS_ORIGINS` | Prod | Comma-separated allowed origins |
 
 ## Production deploy

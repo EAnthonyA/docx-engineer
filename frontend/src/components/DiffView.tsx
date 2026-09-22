@@ -64,7 +64,7 @@ function renderRuns(runs: Run[]) {
 
 function renderPara(para: Paragraph | null) {
   if (!para) return <span style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>—</span>
-  if (!para.runs.length) return <span style={{ color: 'var(--text-secondary)' }}>{para.text || '(empty)'}</span>
+  if (!para.runs.length) return <span style={{ color: 'var(--text-secondary)' }}>{para.text || '(tuščia pastraipa)'}</span>
   return renderRuns(para.runs)
 }
 
@@ -90,8 +90,8 @@ export default function DiffView({ diff }: Props) {
       <table className="diff-table">
         <thead>
           <tr>
-            <th>Before</th>
-            <th>After</th>
+            <th>Buvo</th>
+            <th>Dabar</th>
           </tr>
         </thead>
         <tbody>
@@ -102,10 +102,10 @@ export default function DiffView({ diff }: Props) {
                   key={`sep-${idx}`}
                   className="diff-separator"
                   onClick={() => expandAt(item.expandAt, item.count)}
-                  title="Click to expand"
+                  title="Spustelėkite, jei norite parodyti pastraipas"
                 >
                   <td colSpan={2}>
-                    ··· {item.count} unchanged paragraph{item.count !== 1 ? 's' : ''} (click to expand)
+                    ··· Nepakeistos pastraipos: {item.count} (spustelėkite, jei norite parodyti)
                   </td>
                 </tr>
               )

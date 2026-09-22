@@ -112,7 +112,8 @@ is still ambiguous or missing, as one or more short, specific questions. Ask
 only about details that matter for making the edit (which text, what value,
 what formatting, which part of the document). Number the questions if there
 are several. Do not ask about anything already specified in the instruction
-or in previous answers.\
+or in previous answers. All questions for the user MUST be written in clear,
+friendly Lithuanian.\
 """
 
 

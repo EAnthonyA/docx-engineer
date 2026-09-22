@@ -61,6 +61,27 @@ def _ensure_network(client, name: str) -> None:
         client.networks.create(name, driver="bridge", internal=True)
 
 
+def _failure_diagnostics(container, exit_code: int, error_file: Path) -> str:
+    """Return the best available failure signal from the sandbox container."""
+    if error_file.exists():
+        return error_file.read_text(encoding="utf-8", errors="replace")
+
+    try:
+        container.reload()
+        state = container.attrs.get("State", {})
+        details = [f"exit={exit_code}"]
+        if state.get("OOMKilled"):
+            details.append("oom_killed=true")
+        if state.get("Error"):
+            details.append(f"runtime_error={state['Error']}")
+        logs = container.logs(stdout=True, stderr=True).decode(errors="replace").strip()
+        if logs:
+            details.append(f"container_output={logs[-2000:]}")
+        return "Sandbox exited before it could save a Python traceback (" + "; ".join(details) + ")"
+    except Exception as exc:
+        return f"Sandbox exited before it could save a Python traceback (exit={exit_code}; could not inspect container: {exc})"
+
+
 @app.post("/run")
 def run_job(req: RunRequest):
     job_dir = Path(JOBS_DIR) / req.job_id
@@ -106,7 +127,10 @@ def run_job(req: RunRequest):
         exit_code = result["StatusCode"]
         container_logs = container.logs(stdout=True, stderr=True).decode(errors="replace").strip()
         if container_logs:
-            log.debug("Sandbox container output:\n%s", container_logs)
+            # Avoid placing arbitrary user-script output in normal production
+            # logs. Failed containers include their last output in the
+            # diagnostic below, where it is actionable.
+            log.debug("Sandbox container output for job %s:\n%s", req.job_id, container_logs[-2000:])
 
         if exit_code == 0:
             log.info("Sandbox succeeded for job %s", req.job_id)
@@ -118,7 +142,7 @@ def run_job(req: RunRequest):
             return {"success": False, "error": error}
 
         error_file = out_dir / "error.txt"
-        error = error_file.read_text() if error_file.exists() else "No traceback captured"
+        error = _failure_diagnostics(container, exit_code, error_file)
         log.warning("Sandbox failed for job %s (exit %d): %s", req.job_id, exit_code, error)
         return {"success": False, "error": error}
 

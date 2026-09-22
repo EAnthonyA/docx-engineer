@@ -15,7 +15,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .auth import clear_session, create_session, verify_password, verify_session
-from .jobs import JOBS_DIR, Job, create_job, get_job, recover_interrupted_jobs, save_job
+from .jobs import (
+    JOBS_DIR,
+    Job,
+    add_conversation_message,
+    create_job,
+    get_job,
+    list_jobs,
+    recover_interrupted_jobs,
+    save_job,
+    set_job_stage,
+)
 from . import docx_inspect, llm, sandbox
 
 log = logging.getLogger("main")
@@ -92,6 +102,22 @@ def _job_resp(job: Job) -> dict:
         "attempt": job.attempt,
         "attempt_error": job.attempt_error,
         "max_attempts": MAX_ATTEMPTS,
+        "stage": job.stage,
+        "stage_detail": job.stage_detail,
+        "stage_started_at": job.stage_started_at,
+        "activity": job.activity,
+        "conversation": job.conversation,
+    }
+
+
+def _job_summary(job: Job) -> dict:
+    return {
+        "id": job.id,
+        "instruction": job.instruction,
+        "status": job.status,
+        "stage_detail": job.stage_detail,
+        "created_at": job.created_at,
+        "has_result": bool(job.output_path and Path(job.output_path).exists()),
     }
 
 
@@ -128,6 +154,11 @@ def get_job_status(job_id: str, _: bool = Depends(verify_session)):
     if not job:
         raise HTTPException(404, "Job not found")
     return _job_resp(job)
+
+
+@app.get("/api/jobs")
+def get_job_history(_: bool = Depends(verify_session)):
+    return [_job_summary(job) for job in list_jobs()]
 
 
 @app.get("/api/jobs/{job_id}/download")
@@ -169,6 +200,7 @@ async def refine_job(
 
     if job.last_script:
         job.history.append((job.last_script, f"User feedback: {note}"))
+    add_conversation_message(job, "user", note)
 
     job.status = "running"
     job.output_path = None
@@ -176,6 +208,7 @@ async def refine_job(
     job.last_error = None
     job.attempt = 0
     job.attempt_error = None
+    set_job_stage(job, "queued", "Ruošiamasi pradėti naują bandymą")
     save_job(job)
 
     background_tasks.add_task(_run_agent_loop, job.id, False)
@@ -205,10 +238,12 @@ async def answer_job(
 
     if job.question:
         job.clarifications.append((job.question, answer))
+    add_conversation_message(job, "user", answer)
     job.question = None
     job.status = "running"
     job.attempt = 0
     job.attempt_error = None
+    set_job_stage(job, "queued", "Ruošiamasi tęsti darbą pagal Jūsų atsakymą")
     save_job(job)
 
     background_tasks.add_task(_run_agent_loop, job.id)
@@ -232,11 +267,16 @@ def _run_agent_loop(job_id: str, clarify: bool = True) -> None:
     # Serialize jobs: wait for any in-flight job to finish before starting.
     with _job_slot:
         try:
+            set_job_stage(job, "reading_document", "Skaitoma dokumento struktūra")
+            save_job(job)
+            log.info("Job %s stage=reading_document", job_id)
             _run_job(job_id, job, clarify)
         except Exception:
             log.exception("Job %s agent loop crashed", job_id)
             job.status = "stuck"
-            job.last_error = "Internal error — check server logs"
+            job.last_error = "Darbas netikėtai sustojo. Pabandykite dar kartą su nauju dokumentu."
+            set_job_stage(job, "failed", "Darbas netikėtai sustojo")
+            add_conversation_message(job, "assistant", "Darbas netikėtai sustojo. Atsiprašome, bandykite dar kartą su nauju dokumentu.")
             save_job(job)
 
 
@@ -245,22 +285,33 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
         doc_summary = docx_inspect.summarize(job.input_path)
     except Exception as e:
         job.status = "stuck"
-        job.last_error = f"Could not read your document: {e}"
+        log.exception("Job %s document inspection failed", job_id)
+        job.last_error = "Dokumento perskaityti nepavyko. Patikrinkite, ar pasirinktas Word dokumentas, ir bandykite dar kartą."
+        set_job_stage(job, "failed", "Dokumento perskaityti nepavyko")
+        add_conversation_message(job, "assistant", job.last_error)
         save_job(job)
         return
 
     if clarify:
+        set_job_stage(job, "checking_instruction", "Tikslinamas prašymas")
+        save_job(job)
+        log.info("Job %s stage=checking_instruction", job_id)
         try:
             question = llm.ask_clarification(job.instruction, doc_summary, job.clarifications)
         except Exception as e:
             job.status = "stuck"
-            job.last_error = f"AI service error: {e}"
+            log.exception("Job %s clarification request failed", job_id)
+            job.last_error = "Šiuo metu nepavyko patikslinti prašymo. Pabandykite dar kartą po kelių minučių."
+            set_job_stage(job, "failed", "Prašymo patikslinti nepavyko")
+            add_conversation_message(job, "assistant", job.last_error)
             save_job(job)
             return
 
         if question:
             job.question = question
             job.status = "needs_clarification"
+            set_job_stage(job, "waiting_for_answer", "Laukiama Jūsų atsakymo")
+            add_conversation_message(job, "assistant", question)
             save_job(job)
             log.info("Job %s waiting for clarification: %s", job_id, question)
             return
@@ -272,14 +323,22 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
     job.attempt_error = None
     for _attempt in range(MAX_ATTEMPTS):
         job.attempt = _attempt + 1
+        set_job_stage(
+            job,
+            "generating_script",
+            f"Ruošiamas dokumento pakeitimas ({job.attempt} bandymas iš {MAX_ATTEMPTS})",
+        )
         save_job(job)
-        log.debug("Job %s attempt %d/%d start", job_id, _attempt + 1, MAX_ATTEMPTS)
+        log.info("Job %s stage=generating_script attempt=%d/%d", job_id, job.attempt, MAX_ATTEMPTS)
 
         try:
             script = llm.generate_script(job.instruction, doc_summary, job.history, job.clarifications)
         except Exception as e:
             job.status = "stuck"
-            job.last_error = f"AI service error: {e}"
+            log.exception("Job %s script generation failed", job_id)
+            job.last_error = "Šiuo metu nepavyko paruošti dokumento pakeitimo. Pabandykite dar kartą po kelių minučių."
+            set_job_stage(job, "failed", "Pakeitimo paruošti nepavyko")
+            add_conversation_message(job, "assistant", job.last_error)
             save_job(job)
             return
 
@@ -292,14 +351,19 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         shutil.rmtree(out_dir, ignore_errors=True)
         out_dir.mkdir(exist_ok=True)
 
+        set_job_stage(job, "running_sandbox", "Saugiai atliekami pakeitimai dokumente")
+        save_job(job)
+        log.info("Job %s stage=running_sandbox attempt=%d/%d", job_id, job.attempt, MAX_ATTEMPTS)
         result = sandbox.run_script(job_id)
-        log.debug("Job %s attempt %d sandbox result: success=%s error=%r",
+        log.info("Job %s sandbox result attempt=%d success=%s error=%r",
                   job_id, _attempt + 1, result.get("success"), result.get("error"))
 
         if not result["success"]:
             msg = f"Script crashed: {result.get('error', 'unknown')}"
             job.history.append((script, msg))
             job.attempt_error = msg
+            set_job_stage(job, "retrying", f"{job.attempt} bandymas nepavyko; ruošiamas kitas būdas")
+            add_conversation_message(job, "assistant", f"{job.attempt} bandymas nepavyko. Ieškojome kito būdo atlikti pakeitimą.")
             save_job(job)
             continue
 
@@ -310,9 +374,13 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             msg = "Script completed but produced no output file"
             job.history.append((script, msg))
             job.attempt_error = msg
+            set_job_stage(job, "retrying", f"{job.attempt} bandymas nesukūrė dokumento; ruošiamas kitas būdas")
+            add_conversation_message(job, "assistant", f"{job.attempt} bandymas neparuošė dokumento. Ieškojome kito sprendimo.")
             save_job(job)
             continue
 
+        set_job_stage(job, "checking_result", "Tikrinami atlikti pakeitimai")
+        save_job(job)
         try:
             diff = docx_inspect.compute_diff(job.input_path, output_path)
         except Exception as e:
@@ -320,6 +388,8 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             msg = f"Output file unreadable: {e}"
             job.history.append((script, msg))
             job.attempt_error = msg
+            set_job_stage(job, "retrying", f"{job.attempt} bandymas sukūrė netinkamą dokumentą; ruošiamas kitas būdas")
+            add_conversation_message(job, "assistant", f"{job.attempt} bandymas neparuošė tinkamo dokumento. Ieškojome kito sprendimo.")
             save_job(job)
             continue
 
@@ -328,19 +398,24 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             msg = "Script ran but made no changes to the document"
             job.history.append((script, msg))
             job.attempt_error = msg
+            set_job_stage(job, "retrying", f"{job.attempt} bandymas nepadarė pakeitimų; ruošiamas kitas būdas")
+            add_conversation_message(job, "assistant", f"{job.attempt} bandymas nepadarė pakeitimų. Ieškojome kito sprendimo.")
             save_job(job)
             continue
 
         job.output_path = output_path
         job.diff = diff
         job.status = "needs_review"
+        set_job_stage(job, "ready_for_review", "Dokumentas paruoštas peržiūrėti")
+        add_conversation_message(job, "assistant", "Dokumentas paruoštas. Jį galite atsisiųsti ir peržiūrėti.")
         save_job(job)
         log.info("Job %s ready for review after %d attempt(s): %d change(s)",
                  job_id, _attempt + 1, diff["changed"])
         return
 
     job.status = "stuck"
-    if job.history:
-        job.last_error = job.history[-1][1]
+    job.last_error = "Po kelių bandymų dokumento paruošti nepavyko. Galite pradėti naują dokumentą ir prašymą aprašyti kitaip."
+    set_job_stage(job, "failed", "Visi bandymai baigėsi nesėkmingai")
+    add_conversation_message(job, "assistant", job.last_error)
     save_job(job)
     log.info("Job %s stuck after %d attempts: %s", job_id, MAX_ATTEMPTS, job.last_error)

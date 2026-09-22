@@ -36,4 +36,44 @@ def test_interrupted_running_job_becomes_retryable(tmp_path, monkeypatch):
     restored = jobs.get_job(job.id)
     assert restored is not None
     assert restored.status == "stuck"
-    assert restored.last_error == "Job interrupted by a backend restart. Please try again."
+    assert restored.last_error == "Darbas buvo nutrauktas perkrovus sistemą. Pasirinkite dokumentą ir bandykite dar kartą."
+
+
+def test_job_stage_history_is_persisted_and_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path)
+    jobs._jobs.clear()
+
+    job = jobs.create_job("Make the title bold")
+    for index in range(25):
+        jobs.set_job_stage(job, f"stage-{index}", f"Detail {index}")
+    jobs.save_job(job)
+    jobs._jobs.clear()
+
+    restored = jobs.get_job(job.id)
+    assert restored is not None
+    assert restored.stage == "stage-24"
+    assert restored.stage_detail == "Detail 24"
+    assert len(restored.activity) == 20
+    assert restored.activity[0]["stage"] == "stage-5"
+
+
+def test_job_conversation_and_history_listing_are_persisted(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path)
+    jobs._jobs.clear()
+
+    older = jobs.create_job("Pakeiskite 2023 į 2024")
+    jobs.add_conversation_message(older, "assistant", "Dokumentas paruoštas.")
+    older.created_at = 1
+    jobs.save_job(older)
+
+    newer = jobs.create_job("Paryškinkite datas")
+    newer.created_at = 2
+    jobs.save_job(newer)
+    jobs._jobs.clear()
+
+    listed = jobs.list_jobs()
+    assert [job.id for job in listed] == [newer.id, older.id]
+    assert [message["text"] for message in listed[1].conversation] == [
+        "Pakeiskite 2023 į 2024",
+        "Dokumentas paruoštas.",
+    ]

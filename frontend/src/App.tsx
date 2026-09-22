@@ -3,9 +3,12 @@ import type { ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { api, ApiError } from './api/client'
 import HomePage from './pages/HomePage'
+import HistoryPage from './pages/HistoryPage'
+import HistoryDetailPage from './pages/HistoryDetailPage'
 import JobPage from './pages/JobPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
+import WorkspaceLayout from './components/WorkspaceLayout'
 
 function AuthGuard({ children }: { children: ReactNode }) {
   const { data, isLoading, error } = useQuery({
@@ -25,6 +28,14 @@ function AuthGuard({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
+function WorkspacePage({ children }: { children: ReactNode }) {
+  return (
+    <AuthGuard>
+      <WorkspaceLayout>{children}</WorkspaceLayout>
+    </AuthGuard>
+  )
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -33,17 +44,25 @@ export default function App() {
         <Route
           path="/"
           element={
-            <AuthGuard>
-              <HomePage />
-            </AuthGuard>
+            <WorkspacePage><HomePage /></WorkspacePage>
           }
         />
         <Route
           path="/jobs/:jobId"
           element={
-            <AuthGuard>
-              <JobPage />
-            </AuthGuard>
+            <WorkspacePage><JobPage /></WorkspacePage>
+          }
+        />
+        <Route
+          path="/istorija"
+          element={
+            <WorkspacePage><HistoryPage /></WorkspacePage>
+          }
+        />
+        <Route
+          path="/istorija/:jobId"
+          element={
+            <WorkspacePage><HistoryDetailPage /></WorkspacePage>
           }
         />
         <Route path="*" element={<NotFoundPage />} />

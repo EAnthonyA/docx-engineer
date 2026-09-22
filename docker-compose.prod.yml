@@ -20,7 +20,9 @@ services:
     image: ${DOCKERHUB_USERNAME}/docx-engineer:backend-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
     restart: unless-stopped
     volumes:
-      - jobs_data:/jobs
+      # This must be a host bind mount: the executor passes individual job
+      # files to nested Docker sandbox containers using their host paths.
+      - ${JOBS_HOST_DIR:?Set JOBS_HOST_DIR to an absolute writable host directory}:/jobs
     environment:
       - JOBS_DIR=/jobs
       - EXECUTOR_URL=http://executor:8001
@@ -43,9 +45,10 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - jobs_data:/jobs
+      - ${JOBS_HOST_DIR:?Set JOBS_HOST_DIR to an absolute writable host directory}:/jobs
     environment:
       - JOBS_DIR=/jobs
+      - HOST_JOBS_DIR=${JOBS_HOST_DIR:?Set JOBS_HOST_DIR to an absolute writable host directory}
       - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
       - SANDBOX_TIMEOUT=30
       - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1g}
@@ -54,10 +57,6 @@ services:
         limits:
           memory: 256m
           cpus: "0.5"
-
-volumes:
-  jobs_data:
-    name: docx-engineer-jobs
 
 networks:
   shared-proxy:

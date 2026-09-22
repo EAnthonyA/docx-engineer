@@ -24,6 +24,16 @@ class Job:
     clarifications: list = field(default_factory=list)  # [(question, answer), ...]
     attempt: int = 0
     attempt_error: str | None = None
+    # A running job has several long-lived phases. Persisting them makes an
+    # in-flight job explainable after a backend restart and lets the UI report
+    # meaningful progress instead of showing an indefinite generic spinner.
+    stage: str = "queued"
+    stage_detail: str = "Laukiama, kol bus pradėtas darbas"
+    stage_started_at: float = field(default_factory=time.time)
+    activity: list[dict] = field(default_factory=list)
+    # A compact, user-facing record. It deliberately never includes generated
+    # Python scripts or container diagnostics, which remain in server logs.
+    conversation: list[dict] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
 
@@ -41,6 +51,7 @@ def create_job(instruction: str) -> Job:
         input_path=str(job_dir / "in.docx"),
         instruction=instruction,
     )
+    add_conversation_message(job, "user", instruction)
     _jobs[job_id] = job
     save_job(job)
     return job
@@ -64,6 +75,24 @@ def save_job(job: Job) -> None:
     temp_path = metadata_path.with_suffix(".json.tmp")
     temp_path.write_text(json.dumps(asdict(job), separators=(",", ":")), encoding="utf-8")
     temp_path.replace(metadata_path)
+
+
+def set_job_stage(job: Job, stage: str, detail: str) -> None:
+    """Record a user-safe lifecycle event, retaining a short useful history."""
+    now = time.time()
+    job.stage = stage
+    job.stage_detail = detail
+    job.stage_started_at = now
+    job.activity.append({"at": now, "stage": stage, "detail": detail})
+    # The API is polled by the browser, so keep metadata bounded even for jobs
+    # with several retries.
+    del job.activity[:-20]
+
+
+def add_conversation_message(job: Job, role: str, text: str) -> None:
+    """Persist a short Lithuanian message for the read-only job review."""
+    job.conversation.append({"at": time.time(), "role": role, "text": text})
+    del job.conversation[:-100]
 
 
 def _load_job(job_id: str) -> Job | None:
@@ -90,6 +119,16 @@ def get_job(job_id: str) -> Job | None:
     return job
 
 
+def list_jobs() -> list[Job]:
+    """Return persisted jobs newest first, including jobs after a restart."""
+    found = []
+    for metadata_path in JOBS_DIR.glob("*/job.json"):
+        job = get_job(metadata_path.parent.name)
+        if job:
+            found.append(job)
+    return sorted(found, key=lambda job: job.created_at, reverse=True)
+
+
 def recover_interrupted_jobs() -> list[str]:
     """Make jobs interrupted by a process restart visible and retryable."""
     interrupted = []
@@ -98,7 +137,9 @@ def recover_interrupted_jobs() -> list[str]:
         if not job or job.status != "running":
             continue
         job.status = "stuck"
-        job.last_error = "Job interrupted by a backend restart. Please try again."
+        job.last_error = "Darbas buvo nutrauktas perkrovus sistemą. Pasirinkite dokumentą ir bandykite dar kartą."
+        set_job_stage(job, "failed", "Darbas buvo nutrauktas")
+        add_conversation_message(job, "assistant", "Darbas buvo nutrauktas perkrovus sistemą. Atsiprašome, šio pokalbio tęsti nebegalima.")
         save_job(job)
         _jobs[job.id] = job
         interrupted.append(job.id)
