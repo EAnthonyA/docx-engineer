@@ -263,6 +263,11 @@ export default function JobPage() {
             <p className="diff-meta">
               Iš viso pastraipų: {diff.total} &middot; <strong>Pakeista: {diff.changed}</strong>
             </p>
+            <p className="diff-meta">
+              Pirmasis variantas paruoštas. Dešinėje matote, kaip atrodys dokumentas po pakeitimų.
+              Jei viskas gerai, atsisiųskite failą ir pasirinkite „Baigti ir pašalinti failus“; jei ne, spauskite
+              „Reikia dar vieno pakeitimo“.
+            </p>
           </div>
 
           <div className="diff-actions">
