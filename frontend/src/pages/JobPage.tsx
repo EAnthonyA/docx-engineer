@@ -228,8 +228,24 @@ export default function JobPage() {
     )
   }
 
+  if (job.status === 'done' || !job.diff) {
+    return (
+      <div className="page job-page">
+        <div className="stuck-page">
+          <h2>Dokumentas atsisiųstas</h2>
+          <p>
+            Failas išsaugotas Jūsų įrenginyje. Serverio kopija pašalinta, o pokalbis liko tik peržiūrai.
+          </p>
+          <button className="btn btn--primary" onClick={() => navigate('/')}>
+            Pasirinkti naują dokumentą
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   // needs_review
-  const diff = job.diff!
+  const diff = job.diff
   return (
     <div className="page job-page">
       <main className="main-content">
