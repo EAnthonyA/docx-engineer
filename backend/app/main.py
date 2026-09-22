@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .auth import clear_session, create_session, verify_password, verify_session
-from .jobs import JOBS_DIR, Job, cleanup_old_jobs, create_job, get_job
+from .jobs import JOBS_DIR, Job, create_job, get_job, recover_interrupted_jobs, save_job
 from . import docx_inspect, llm, sandbox
 
 log = logging.getLogger("main")
@@ -32,6 +32,9 @@ _job_slot = threading.Semaphore(1)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    interrupted = recover_interrupted_jobs()
+    if interrupted:
+        log.warning("Marked %d interrupted job(s) as stuck", len(interrupted))
     yield
 
 
@@ -173,6 +176,7 @@ async def refine_job(
     job.last_error = None
     job.attempt = 0
     job.attempt_error = None
+    save_job(job)
 
     background_tasks.add_task(_run_agent_loop, job.id, False)
     return _job_resp(job)
@@ -205,6 +209,7 @@ async def answer_job(
     job.status = "running"
     job.attempt = 0
     job.attempt_error = None
+    save_job(job)
 
     background_tasks.add_task(_run_agent_loop, job.id)
     return _job_resp(job)
@@ -232,6 +237,7 @@ def _run_agent_loop(job_id: str, clarify: bool = True) -> None:
             log.exception("Job %s agent loop crashed", job_id)
             job.status = "stuck"
             job.last_error = "Internal error — check server logs"
+            save_job(job)
 
 
 def _run_job(job_id: str, job, clarify: bool) -> None:
@@ -240,6 +246,7 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
     except Exception as e:
         job.status = "stuck"
         job.last_error = f"Could not read your document: {e}"
+        save_job(job)
         return
 
     if clarify:
@@ -248,11 +255,13 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
         except Exception as e:
             job.status = "stuck"
             job.last_error = f"AI service error: {e}"
+            save_job(job)
             return
 
         if question:
             job.question = question
             job.status = "needs_clarification"
+            save_job(job)
             log.info("Job %s waiting for clarification: %s", job_id, question)
             return
 
@@ -263,6 +272,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
     job.attempt_error = None
     for _attempt in range(MAX_ATTEMPTS):
         job.attempt = _attempt + 1
+        save_job(job)
         log.debug("Job %s attempt %d/%d start", job_id, _attempt + 1, MAX_ATTEMPTS)
 
         try:
@@ -270,9 +280,11 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         except Exception as e:
             job.status = "stuck"
             job.last_error = f"AI service error: {e}"
+            save_job(job)
             return
 
         job.last_script = script
+        save_job(job)
         (job_dir / "script.py").write_text(script, encoding="utf-8")
 
         # Clear previous output
@@ -288,6 +300,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             msg = f"Script crashed: {result.get('error', 'unknown')}"
             job.history.append((script, msg))
             job.attempt_error = msg
+            save_job(job)
             continue
 
         output_path = str(out_dir / "out.docx")
@@ -297,6 +310,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             msg = "Script completed but produced no output file"
             job.history.append((script, msg))
             job.attempt_error = msg
+            save_job(job)
             continue
 
         try:
@@ -306,6 +320,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             msg = f"Output file unreadable: {e}"
             job.history.append((script, msg))
             job.attempt_error = msg
+            save_job(job)
             continue
 
         log.debug("Job %s attempt %d diff: total=%d changed=%d", job_id, _attempt + 1, diff["total"], diff["changed"])
@@ -313,11 +328,13 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             msg = "Script ran but made no changes to the document"
             job.history.append((script, msg))
             job.attempt_error = msg
+            save_job(job)
             continue
 
         job.output_path = output_path
         job.diff = diff
         job.status = "needs_review"
+        save_job(job)
         log.info("Job %s ready for review after %d attempt(s): %d change(s)",
                  job_id, _attempt + 1, diff["changed"])
         return
@@ -325,4 +342,5 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
     job.status = "stuck"
     if job.history:
         job.last_error = job.history[-1][1]
+    save_job(job)
     log.info("Job %s stuck after %d attempts: %s", job_id, MAX_ATTEMPTS, job.last_error)

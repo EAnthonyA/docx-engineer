@@ -5,6 +5,7 @@ import { api, ApiError } from './api/client'
 import HomePage from './pages/HomePage'
 import JobPage from './pages/JobPage'
 import LoginPage from './pages/LoginPage'
+import NotFoundPage from './pages/NotFoundPage'
 
 function AuthGuard({ children }: { children: ReactNode }) {
   const { data, isLoading, error } = useQuery({
@@ -45,7 +46,7 @@ export default function App() {
             </AuthGuard>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </BrowserRouter>
   )
