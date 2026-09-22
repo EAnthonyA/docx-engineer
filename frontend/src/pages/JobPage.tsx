@@ -69,6 +69,14 @@ export default function JobPage() {
     },
   })
 
+  const completeJob = useMutation({
+    mutationFn: () => api.completeJob(jobId!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['job-history'] })
+      navigate('/')
+    },
+  })
+
   if (error) {
     return (
       <div className="page job-page">
@@ -263,7 +271,7 @@ export default function JobPage() {
               className="btn btn--primary"
               download="pataisytas-dokumentas.docx"
             >
-              Atsisiųsti sutvarkytą dokumentą
+              Atsisiųsti ir peržiūrėti
             </a>
             <button
               className="btn btn--secondary"
@@ -275,6 +283,17 @@ export default function JobPage() {
             >
               {showRefine ? 'Uždaryti' : 'Reikia dar vieno pakeitimo'}
             </button>
+            <button
+              className="btn btn--ghost"
+              disabled={completeJob.isPending}
+              onClick={() => {
+                if (window.confirm('Dokumento failai bus pašalinti iš serverio. Pokalbis liks tik peržiūrai.')) {
+                  completeJob.mutate()
+                }
+              }}
+            >
+              {completeJob.isPending ? 'Šalinama…' : 'Baigti ir pašalinti failus'}
+            </button>
             <button className="btn btn--ghost" onClick={() => navigate('/')}>
               Naujas dokumentas
             </button>
@@ -283,6 +302,7 @@ export default function JobPage() {
           {showRefine && (
             <div className="refine-panel">
               <h3>Kas dar turėtų būti pakeista?</h3>
+              <p>Atsisiųstas dokumentas laikinai lieka serveryje, kol paprašysite papildomo pakeitimo arba užbaigsite užduotį.</p>
               <textarea
                 className="textarea"
                 rows={3}

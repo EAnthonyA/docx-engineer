@@ -12,7 +12,6 @@ from pathlib import Path
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 from .auth import clear_session, create_session, verify_password, verify_session
@@ -180,9 +179,20 @@ def download_result(job_id: str, _: bool = Depends(verify_session)):
         job.output_path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename="result.docx",
-        # The browser has the file at this point; keep only the chat record.
-        background=BackgroundTask(discard_job_documents, job),
     )
+
+
+@app.post("/api/jobs/{job_id}/complete")
+def complete_job(job_id: str, _: bool = Depends(verify_session)):
+    """Explicitly finish a reviewed job and retain its chat record only."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "needs_review":
+        raise HTTPException(400, "Job cannot be completed in its current state")
+
+    discard_job_documents(job)
+    return _job_resp(job)
 
 
 class RefineRequest(BaseModel):

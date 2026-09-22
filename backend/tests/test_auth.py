@@ -52,7 +52,7 @@ def test_logout(client):
     assert resp.status_code == 401
 
 
-def test_downloading_result_archives_its_document_files(client, tmp_path, monkeypatch):
+def test_download_keeps_files_until_job_is_explicitly_completed(client, tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path)
     jobs._jobs.clear()
     job = jobs.create_job("Make the title bold")
@@ -69,6 +69,13 @@ def test_downloading_result_archives_its_document_files(client, tmp_path, monkey
 
     assert response.status_code == 200
     assert response.content == b"result"
+    assert input_file.exists()
+    assert output_file.exists()
+    assert jobs.get_job(job.id).status == "needs_review"
+
+    completed = client.post(f"/api/jobs/{job.id}/complete")
+
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "done"
     assert not input_file.exists()
     assert not output_file.exists()
-    assert jobs.get_job(job.id).status == "done"

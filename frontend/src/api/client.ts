@@ -74,6 +74,10 @@ export const api = {
     })
   },
 
+  completeJob(jobId: string) {
+    return request<Job>(`/api/jobs/${jobId}/complete`, { method: 'POST' })
+  },
+
   answerJob(jobId: string, answer: string) {
     return request<Job>(`/api/jobs/${jobId}/answer`, {
       method: 'POST',
