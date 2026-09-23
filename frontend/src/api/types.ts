@@ -39,6 +39,7 @@ export interface Job {
   stage_detail: string
   stage_started_at: number
   activity: JobActivity[]
+  diagnostics: JobDiagnostic[]
   conversation: ConversationMessage[]
 }
 
@@ -46,6 +47,12 @@ export interface JobActivity {
   at: number
   stage: string
   detail: string
+}
+
+export interface JobDiagnostic {
+  at: number
+  event: string
+  [key: string]: string | number | null
 }
 
 export interface ConversationMessage {

@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+import time
 from pathlib import Path
 
 import docker
@@ -8,7 +9,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=_log_level)
+logging.basicConfig(
+    level=_log_level,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("docker").setLevel(logging.WARNING)
 log = logging.getLogger("executor")
@@ -105,7 +109,12 @@ def run_job(req: RunRequest):
     client = docker.from_env()
     _ensure_network(client, SANDBOX_NETWORK)
     container = None
+    started_at = time.monotonic()
     try:
+        log.info(
+            "Sandbox starting for job %s (memory=%s timeout=%ds)",
+            req.job_id, SANDBOX_MEMORY, SANDBOX_TIMEOUT,
+        )
         container = client.containers.create(
             SANDBOX_IMAGE,
             network=SANDBOX_NETWORK,
@@ -133,25 +142,26 @@ def run_job(req: RunRequest):
             log.debug("Sandbox container output for job %s:\n%s", req.job_id, container_logs[-2000:])
 
         if exit_code == 0:
-            log.info("Sandbox succeeded for job %s", req.job_id)
-            return {"success": True, "error": None}
+            duration_ms = round((time.monotonic() - started_at) * 1000)
+            log.info("Sandbox succeeded for job %s in %dms", req.job_id, duration_ms)
+            return {"success": True, "error": None, "duration_ms": duration_ms}
 
         if exit_code == 137:
             error = "OOM: sandbox killed (out of memory). Script must be more memory-efficient: avoid storing large intermediate lists, process paragraphs one at a time without accumulating data."
             log.warning("Sandbox OOM for job %s", req.job_id)
-            return {"success": False, "error": error}
+            return {"success": False, "error": error, "duration_ms": round((time.monotonic() - started_at) * 1000)}
 
         error_file = out_dir / "error.txt"
         error = _failure_diagnostics(container, exit_code, error_file)
         log.warning("Sandbox failed for job %s (exit %d): %s", req.job_id, exit_code, error)
-        return {"success": False, "error": error}
+        return {"success": False, "error": error, "duration_ms": round((time.monotonic() - started_at) * 1000)}
 
     except Exception as e:
         if "timed out" in str(e).lower() or "ReadTimeout" in type(e).__name__:
             log.warning("Sandbox timeout for job %s (limit %ds)", req.job_id, SANDBOX_TIMEOUT)
-            return {"success": False, "error": f"Timeout: script took longer than {SANDBOX_TIMEOUT}s. Rewrite for performance: avoid nested loops, process paragraphs in a single pass, do not re-parse XML repeatedly."}
+            return {"success": False, "error": f"Timeout: script took longer than {SANDBOX_TIMEOUT}s. Rewrite for performance: avoid nested loops, process paragraphs in a single pass, do not re-parse XML repeatedly.", "duration_ms": round((time.monotonic() - started_at) * 1000)}
         log.exception("Sandbox run failed for job %s", req.job_id)
-        return {"success": False, "error": f"Executor error: {e}"}
+        return {"success": False, "error": f"Executor error: {e}", "duration_ms": round((time.monotonic() - started_at) * 1000)}
     finally:
         if container:
             try:

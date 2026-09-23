@@ -3,7 +3,7 @@ import os
 import httpx
 
 _EXECUTOR_URL = os.environ.get("EXECUTOR_URL", "http://executor:8001")
-_SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "60"))
+_SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "180"))
 
 
 def run_script(job_id: str) -> dict:

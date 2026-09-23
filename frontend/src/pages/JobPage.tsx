@@ -203,6 +203,7 @@ export default function JobPage() {
           <p>
             Pabandėme kelis būdus, tačiau rezultato nepavyko paruošti. Parašykite, ką norėtumėte atlikti kitaip — padės ir trumpas paaiškinimas.
           </p>
+          {job.last_error && <p className="error-text">{job.last_error}</p>}
 
           <div style={{ width: '100%', maxWidth: 480 }}>
             <div className="field" style={{ marginBottom: 12 }}>

@@ -31,6 +31,10 @@ class Job:
     stage_detail: str = "Laukiama, kol bus pradėtas darbas"
     stage_started_at: float = field(default_factory=time.time)
     activity: list[dict] = field(default_factory=list)
+    # Compact support diagnostics, available to the authenticated operator.
+    # These intentionally contain only lifecycle metrics and error categories:
+    # never document text, generated Python, secrets, or container output.
+    diagnostics: list[dict] = field(default_factory=list)
     # A compact, user-facing record. It deliberately never includes generated
     # Python scripts or container diagnostics, which remain in server logs.
     conversation: list[dict] = field(default_factory=list)
@@ -129,6 +133,13 @@ def set_job_stage(job: Job, stage: str, detail: str) -> None:
     del job.activity[:-20]
 
 
+def add_diagnostic(job: Job, event: str, **details) -> None:
+    """Persist a bounded, privacy-safe support timeline for a job."""
+    entry = {"at": time.time(), "event": event, **details}
+    job.diagnostics.append(entry)
+    del job.diagnostics[:-50]
+
+
 def add_conversation_message(job: Job, role: str, text: str) -> None:
     """Persist a short Lithuanian message for the read-only job review."""
     job.conversation.append({"at": time.time(), "role": role, "text": text})
@@ -176,9 +187,14 @@ def recover_interrupted_jobs() -> list[str]:
         job = _load_job(metadata_path.parent.name)
         if not job or job.status != "running":
             continue
+        interrupted_stage = job.stage
         job.status = "stuck"
-        job.last_error = "Darbas buvo nutrauktas perkrovus sistemą. Pasirinkite dokumentą ir bandykite dar kartą."
+        job.last_error = (
+            "Darbas buvo nutrauktas vykdant etapą „"
+            f"{job.stage_detail}“. Galite pabandyti dar kartą su tuo pačiu dokumentu."
+        )
         set_job_stage(job, "failed", "Darbas buvo nutrauktas")
+        add_diagnostic(job, "process_interrupted", stage=interrupted_stage)
         add_conversation_message(job, "assistant", "Darbas buvo nutrauktas perkrovus sistemą. Atsiprašome, šio pokalbio tęsti nebegalima.")
         save_job(job)
         _jobs[job.id] = job

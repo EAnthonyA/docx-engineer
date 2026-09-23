@@ -30,6 +30,9 @@ services:
       - SESSION_SECRET=${SESSION_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-pro}
+      # Must exceed the executor's sandbox timeout so the backend does not
+      # report a false transport timeout for a long document.
+      - SANDBOX_TIMEOUT=${SANDBOX_TIMEOUT:-180}
       - SECURE_COOKIES=true
       - CORS_ORIGINS=${CORS_ORIGINS:-https://sangri.tech}
     depends_on:
@@ -50,8 +53,10 @@ services:
       - JOBS_DIR=/jobs
       - HOST_JOBS_DIR=${JOBS_HOST_DIR:?Set JOBS_HOST_DIR to an absolute writable host directory}
       - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
-      - SANDBOX_TIMEOUT=30
-      - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1g}
+      # A bounded allowance for long, heavily formatted Word files. Jobs are
+      # serialized by the backend, so only one sandbox may use it at once.
+      - SANDBOX_TIMEOUT=${SANDBOX_TIMEOUT:-180}
+      - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1500m}
     deploy:
       resources:
         limits:

@@ -36,7 +36,11 @@ def test_interrupted_running_job_becomes_retryable(tmp_path, monkeypatch):
     restored = jobs.get_job(job.id)
     assert restored is not None
     assert restored.status == "stuck"
-    assert restored.last_error == "Darbas buvo nutrauktas perkrovus sistemą. Pasirinkite dokumentą ir bandykite dar kartą."
+    assert restored.last_error == (
+        "Darbas buvo nutrauktas vykdant etapą „Laukiama, kol bus pradėtas darbas“. "
+        "Galite pabandyti dar kartą su tuo pačiu dokumentu."
+    )
+    assert restored.diagnostics[-1]["event"] == "process_interrupted"
 
 
 def test_job_stage_history_is_persisted_and_bounded(tmp_path, monkeypatch):

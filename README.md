@@ -59,7 +59,8 @@ make test-sandbox
 | `SESSION_SECRET` | Yes (prod) | Long random string for cookie signing |
 | `ADMIN_PASSWORD` | Dev only | Plaintext password (default: `admin`) |
 | `ADMIN_PASSWORD_HASH` | Prod | Bcrypt hash — generate with `make hash-password` |
-| `SANDBOX_MEMORY` | No | Sandbox container memory limit (default `1g`; dev compose sets `1536m`) |
+| `SANDBOX_MEMORY` | No | Sandbox container memory limit (production default: `1500m`; dev compose sets `1536m`) |
+| `SANDBOX_TIMEOUT` | No | Maximum sandbox runtime in seconds (production default: `180`) |
 | `JOBS_HOST_DIR` | Prod | Absolute host directory mounted at `/jobs`; required because the executor bind-mounts individual files into nested sandbox containers |
 | `CORS_ORIGINS` | Prod | Comma-separated allowed origins |
 

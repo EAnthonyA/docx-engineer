@@ -26,6 +26,16 @@ def test_summarize_returns_valid_json():
     assert data["non_empty_paragraphs"] >= 3
 
 
+def test_summarize_stops_after_2000_streamed_body_paragraphs():
+    path = _make_docx([f"Paragraph {index}" for index in range(2_100)])
+
+    data = json.loads(summarize(path))
+
+    assert data["total_paragraphs"] == 2_000
+    assert data["non_empty_paragraphs"] == 2_000
+    assert data["sample_paragraphs"][0]["text_preview"] == "Paragraph 0"
+
+
 def test_compute_diff_unchanged():
     path = _make_docx(["Same text"])
     diff = compute_diff(path, path)
@@ -50,6 +60,20 @@ def test_compute_diff_detects_change():
     assert diff["changed"] > 0
     changed = [e for e in diff["entries"] if e["status"] == "changed"]
     assert len(changed) >= 1
+
+
+def test_compute_diff_detects_a_change_after_the_preview_window():
+    orig = _make_docx([f"Paragraph {index}" for index in range(75)])
+    doc = Document(orig)
+    doc.paragraphs[60].runs[0].bold = True
+    modified = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+    doc.save(modified.name)
+
+    diff = compute_diff(orig, modified.name)
+
+    assert diff["total"] == 75
+    assert diff["changed"] == 1
+    assert diff["entries"][0]["before"]["text"] == "Paragraph 60"
 
 
 def test_compute_diff_detects_added_paragraphs():

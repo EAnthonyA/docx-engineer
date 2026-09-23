@@ -1,7 +1,12 @@
 import logging
 import os
+import json
+import time
 
-logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 import shutil
@@ -18,6 +23,7 @@ from .auth import clear_session, create_session, verify_password, verify_session
 from .jobs import (
     JOBS_DIR,
     Job,
+    add_diagnostic,
     add_conversation_message,
     archive_finished_job_documents,
     create_job,
@@ -108,6 +114,7 @@ def _job_resp(job: Job) -> dict:
         "stage_detail": job.stage_detail,
         "stage_started_at": job.stage_started_at,
         "activity": job.activity,
+        "diagnostics": job.diagnostics,
         "conversation": job.conversation,
     }
 
@@ -273,6 +280,17 @@ def health():
     return {"status": "ok"}
 
 
+def _process_rss_mb() -> int | None:
+    """Return current Linux process RSS for support diagnostics, if available."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) // 1024
+    except (FileNotFoundError, ValueError, IndexError):
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Agent loop (runs in thread pool — blocking I/O is intentional here)
 # ---------------------------------------------------------------------------
@@ -286,6 +304,7 @@ def _run_agent_loop(job_id: str, clarify: bool = True) -> None:
     with _job_slot:
         try:
             set_job_stage(job, "reading_document", "Skaitoma dokumento struktūra")
+            add_diagnostic(job, "stage_started", stage="reading_document", rss_mb=_process_rss_mb())
             save_job(job)
             log.info("Job %s stage=reading_document", job_id)
             _run_job(job_id, job, clarify)
@@ -299,16 +318,47 @@ def _run_agent_loop(job_id: str, clarify: bool = True) -> None:
 
 
 def _run_job(job_id: str, job, clarify: bool) -> None:
+    started_at = time.monotonic()
+    try:
+        input_bytes = Path(job.input_path).stat().st_size
+    except OSError:
+        input_bytes = None
+    add_diagnostic(
+        job,
+        "document_inspection_started",
+        input_bytes=input_bytes,
+        rss_mb=_process_rss_mb(),
+    )
+    # The start marker must hit disk before parsing: a cgroup OOM cannot be
+    # caught by Python, but recovery can still report the interrupted phase.
+    save_job(job)
     try:
         doc_summary = docx_inspect.summarize(job.input_path)
     except Exception as e:
         job.status = "stuck"
         log.exception("Job %s document inspection failed", job_id)
+        add_diagnostic(
+            job,
+            "document_inspection_failed",
+            error_type=type(e).__name__,
+            elapsed_ms=round((time.monotonic() - started_at) * 1000),
+            rss_mb=_process_rss_mb(),
+        )
         job.last_error = "Dokumento perskaityti nepavyko. Patikrinkite, ar pasirinktas Word dokumentas, ir bandykite dar kartą."
         set_job_stage(job, "failed", "Dokumento perskaityti nepavyko")
         add_conversation_message(job, "assistant", job.last_error)
         save_job(job)
         return
+
+    summary_data = json.loads(doc_summary)
+    add_diagnostic(
+        job,
+        "document_inspection_completed",
+        elapsed_ms=round((time.monotonic() - started_at) * 1000),
+        body_paragraphs=summary_data["total_paragraphs"],
+        rss_mb=_process_rss_mb(),
+    )
+    save_job(job)
 
     if clarify:
         set_job_stage(job, "checking_instruction", "Tikslinamas prašymas")
@@ -361,6 +411,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             return
 
         job.last_script = script
+        add_diagnostic(job, "script_generated", attempt=job.attempt, script_chars=len(script))
         save_job(job)
         (job_dir / "script.py").write_text(script, encoding="utf-8")
 
@@ -375,9 +426,24 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         result = sandbox.run_script(job_id)
         log.info("Job %s sandbox result attempt=%d success=%s error=%r",
                   job_id, _attempt + 1, result.get("success"), result.get("error"))
+        duration_ms = result.get("duration_ms")
+        duration_details = (
+            {"duration_ms": duration_ms}
+            if isinstance(duration_ms, int) else {}
+        )
 
         if not result["success"]:
             msg = f"Script crashed: {result.get('error', 'unknown')}"
+            error_text = str(result.get("error", "unknown")).lower()
+            error_kind = (
+                "oom" if error_text.startswith("oom:") else
+                "timeout" if error_text.startswith("timeout:") else
+                "sandbox_failure"
+            )
+            add_diagnostic(
+                job, "sandbox_failed", attempt=job.attempt,
+                error_kind=error_kind, **duration_details,
+            )
             job.history.append((script, msg))
             job.attempt_error = msg
             set_job_stage(job, "retrying", f"{job.attempt} bandymas nepavyko; ruošiamas kitas būdas")
@@ -390,6 +456,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         log.debug("Job %s attempt %d output file exists: %s", job_id, _attempt + 1, file_exists)
         if not file_exists:
             msg = "Script completed but produced no output file"
+            add_diagnostic(job, "output_missing", attempt=job.attempt)
             job.history.append((script, msg))
             job.attempt_error = msg
             set_job_stage(job, "retrying", f"{job.attempt} bandymas nesukūrė dokumento; ruošiamas kitas būdas")
@@ -404,6 +471,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         except Exception as e:
             log.exception("Job %s attempt %d compute_diff failed", job_id, _attempt + 1)
             msg = f"Output file unreadable: {e}"
+            add_diagnostic(job, "result_check_failed", attempt=job.attempt, error_type=type(e).__name__)
             job.history.append((script, msg))
             job.attempt_error = msg
             set_job_stage(job, "retrying", f"{job.attempt} bandymas sukūrė netinkamą dokumentą; ruošiamas kitas būdas")
@@ -414,6 +482,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         log.debug("Job %s attempt %d diff: total=%d changed=%d", job_id, _attempt + 1, diff["total"], diff["changed"])
         if diff["changed"] == 0:
             msg = "Script ran but made no changes to the document"
+            add_diagnostic(job, "no_changes_detected", attempt=job.attempt)
             job.history.append((script, msg))
             job.attempt_error = msg
             set_job_stage(job, "retrying", f"{job.attempt} bandymas nepadarė pakeitimų; ruošiamas kitas būdas")
@@ -424,6 +493,10 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         job.output_path = output_path
         job.diff = diff
         job.status = "needs_review"
+        add_diagnostic(
+            job, "result_ready", attempt=job.attempt,
+            changed_paragraphs=diff["changed"], **duration_details,
+        )
         set_job_stage(job, "ready_for_review", "Dokumentas paruoštas peržiūrėti")
         add_conversation_message(job, "assistant", "Dokumentas paruoštas. Jį galite atsisiųsti ir peržiūrėti.")
         save_job(job)
