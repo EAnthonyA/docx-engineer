@@ -23,6 +23,15 @@ def test_contract_accepts_safe_imports_and_text_that_mentions_forbidden_words():
     assert executor._static_check("import re\nfrom docx.shared import Pt\ndef edit(doc, tools):\n    tools.replace_text(doc, 'open(', 'socket')") is None
 
 
+@pytest.mark.parametrize("script", [
+    "import docx\ndef edit(doc, tools):\n    return getattr(docx, '__builtins__')['__import__']('os')",
+    "import docx\ndef edit(doc, tools):\n    return docx.__builtins__",
+    "def edit(doc, tools):\n    return globals()",
+])
+def test_contract_rejects_indirect_builtin_access(script):
+    assert executor._static_check(script)
+
+
 def test_job_id_cannot_escape_job_directory():
     with pytest.raises(ValidationError):
         executor.RunRequest(job_id="../../etc")

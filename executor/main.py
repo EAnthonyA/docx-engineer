@@ -28,6 +28,15 @@ SANDBOX_MEMORY = os.environ.get("SANDBOX_MEMORY", "1g")
 SANDBOX_NETWORK = os.environ.get("SANDBOX_NETWORK", "docx-engineer-sandbox-net")
 
 # Syntax and contract validation supplement the container isolation boundary.
+# They intentionally prohibit reflection helpers because user scripts run with
+# a deliberately small builtins set in the sandbox (see sandbox/entrypoint.py).
+_ALLOWED_IMPORTS = {"docx", "re", "html", "math", "datetime", "decimal", "collections"}
+_FORBIDDEN_NAMES = {
+    "eval", "exec", "open", "compile", "__import__", "__builtins__",
+    "getattr", "setattr", "delattr", "hasattr", "globals", "locals", "vars", "dir",
+    "breakpoint", "help", "input",
+}
+_FORBIDDEN_STRING_ATTRIBUTES = {"__builtins__", "__import__"}
 
 
 class RunRequest(BaseModel):
@@ -45,17 +54,22 @@ def _static_check(script: str) -> str | None:
     args = functions[0].args
     if [arg.arg for arg in args.posonlyargs + args.args] != ["doc", "tools"] or args.kwonlyargs or args.vararg or args.kwarg:
         return "Required signature: def edit(doc, tools)"
-    allowed_imports = {"docx", "re", "html", "math", "datetime", "decimal", "collections"}
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.Import, ast.ImportFrom)):
             return "Only imports and the edit function are allowed at module level"
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
-            if any(name.split(".")[0] not in allowed_imports for name in names):
+            if any(name.split(".")[0] not in _ALLOWED_IMPORTS for name in names):
                 return "Unsupported import; use the documented tools API"
-        if isinstance(node, ast.Name) and node.id in {"eval", "exec", "open", "compile", "__import__", "__builtins__"}:
+            if any(alias.name.startswith("__") for alias in node.names):
+                return "Dunder imports are not allowed"
+        if isinstance(node, ast.Name) and (node.id in _FORBIDDEN_NAMES or node.id.startswith("__")):
             return f"Forbidden operation: {node.id}"
+        if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
+            return "Dunder attribute access is not allowed"
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in _FORBIDDEN_STRING_ATTRIBUTES:
+            return "Forbidden builtins access"
     return None
 
 

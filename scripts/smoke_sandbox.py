@@ -25,7 +25,11 @@ def main():
         fixtures.chmod(0o777)
         output.chmod(0o777)
         script = root / "script.py"
-        script.write_text('def edit(doc, tools):\n    tools.replace_text(doc, "test", "smoke passed")\n')
+        script.write_text(
+            'def edit(doc, tools):\n'
+            '    import re\n'
+            '    tools.replace_text(doc, re.sub("test", "test", "test"), "smoke passed")\n'
+        )
         script.chmod(0o644)
         subprocess.run(common + ["-v", f"{fixtures}:/fixtures:rw", image, "python", "-c",
             "from docx import Document; d=Document(); d.add_paragraph('test'); d.save('/fixtures/in.docx')"],
@@ -39,6 +43,16 @@ def main():
             xml = ElementTree.fromstring(archive.read("word/document.xml"))
             text = "".join(xml.itertext())
             assert "smoke passed" in text, "Sandbox produced an unchanged document"
+
+        blocked = root / "blocked.py"
+        blocked.write_text(
+            'def edit(doc, tools):\n'
+            '    return __builtins__["__import__"]("os")\n'
+        )
+        blocked_result = subprocess.run(common + ["-v", f"{fixtures / 'in.docx'}:/work/in.docx:ro",
+            "-v", f"{blocked}:/work/script.py:ro", "-v", f"{output}:/work/out:rw", image], timeout=60)
+        assert blocked_result.returncode != 0, "Sandbox allowed an unsupported import"
+        assert "Unsupported import: os" in (output / "error.txt").read_text()
     print("Sandbox smoke test passed")
 
 

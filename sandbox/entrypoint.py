@@ -1,6 +1,6 @@
+import builtins
 import sys
 import traceback
-import importlib.util
 from pathlib import Path
 
 from docx import Document
@@ -13,25 +13,46 @@ SCRIPT_PATH = "/work/script.py"
 ERROR_PATH = "/work/out/error.txt"
 STAGE_PATH = "/work/out/stage.txt"
 
+_ALLOWED_IMPORTS = {"docx", "re", "html", "math", "datetime", "decimal", "collections"}
+_SAFE_BUILTIN_NAMES = {
+    "Exception", "IndexError", "KeyError", "RuntimeError", "StopIteration", "TypeError", "ValueError",
+    "abs", "all", "any", "bool", "callable", "dict", "enumerate", "filter", "float", "int",
+    "isinstance", "iter", "len", "list", "map", "max", "min", "next", "range", "reversed",
+    "round", "set", "slice", "sorted", "str", "sum", "tuple", "zip",
+}
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """Import only modules that the generated-script contract permits."""
+    if level or name.split(".")[0] not in _ALLOWED_IMPORTS:
+        raise ImportError(f"Unsupported import: {name}")
+    return builtins.__import__(name, globals, locals, fromlist, level)
+
+
+_SAFE_BUILTINS = {name: getattr(builtins, name) for name in _SAFE_BUILTIN_NAMES}
+_SAFE_BUILTINS["__import__"] = _safe_import
+
+
+def _load_edit_function(script_path: str):
+    """Load a validated user script without exposing Python's full builtins."""
+    source = Path(script_path).read_text(encoding="utf-8")
+    namespace = {"__builtins__": _SAFE_BUILTINS, "__name__": "user_script"}
+    exec(compile(source, script_path, "exec"), namespace)
+    edit = namespace.get("edit")
+    if not callable(edit):
+        raise AttributeError("Script must define: def edit(doc, tools) -> None")
+    return edit
+
 
 def main():
     try:
         Path(STAGE_PATH).write_text("importing_script")
-        spec = importlib.util.spec_from_file_location("user_script", SCRIPT_PATH)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load script from {SCRIPT_PATH}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        if not hasattr(module, "edit"):
-            raise AttributeError(
-                "Script must define: def edit(doc, tools) -> None"
-            )
+        edit = _load_edit_function(SCRIPT_PATH)
 
         Path(STAGE_PATH).write_text("loading_document")
         doc = Document(INPUT_PATH)
         Path(STAGE_PATH).write_text("editing_document")
-        module.edit(doc, DocxTools())
+        edit(doc, DocxTools())
         Path(STAGE_PATH).write_text("saving_document")
         save_document(doc, OUTPUT_PATH)
 
