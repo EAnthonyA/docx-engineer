@@ -1,4 +1,6 @@
+import hashlib
 import json
+import re
 import zipfile
 from difflib import SequenceMatcher
 from itertools import islice, zip_longest
@@ -15,6 +17,7 @@ _PARAGRAPH_PROPERTIES = f"{{{_W}}}pPr"
 _PARAGRAPH_STYLE = f"{{{_W}}}pStyle"
 _RUN_PROPERTIES = f"{{{_W}}}rPr"
 _DIFF_PARA_LIMIT = 50
+_STRUCTURAL_TAGS = (_P, f"{{{_W}}}tbl", f"{{{_W}}}tr", f"{{{_W}}}tc")
 
 
 def _release_element(element) -> None:
@@ -34,11 +37,11 @@ def _paragraph_style_names(docx_path: str) -> dict[str, str]:
     try:
         with zipfile.ZipFile(docx_path) as archive:
             with archive.open("word/styles.xml") as styles_file:
-                for _, style in etree.iterparse(
+                for _, style in _xml_events(
                     styles_file, events=("end",), tag=f"{{{_W}}}style"
                 ):
                     _add_paragraph_style_name(names, style)
-                    style.clear()
+                    _release_element(style)
     except KeyError:
         # styles.xml is optional in a valid DOCX. The summary still works
         # without it and reports the standard style name below.
@@ -67,91 +70,171 @@ def _style_name(paragraph, style_names: dict[str, str]) -> str:
     return style_names.get(style_id, style_id or "Normal")
 
 
-def _append_sample_paragraph(
-    samples: list[dict], paragraph, text: str, index: int, style_names: dict[str, str]
-) -> None:
-    if not text.strip() or len(samples) >= _DIFF_PARA_LIMIT:
-        return
-
-    samples.append({
-        "index": index,
-        "style": _style_name(paragraph, style_names),
-        "text_preview": text[:300],
-        "run_count": len(paragraph.findall(f"./{_RUN}")),
-    })
+MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 
 
-def summarize(path: str) -> str:
-    """Return a bounded summary without loading the whole DOCX tree.
+class DocumentTooLarge(ValueError):
+    pass
 
-    ``python-docx.Document(path)`` constructs a Python object for every XML
-    element. A visually ordinary, long Word document can therefore consume
-    multiple gigabytes of memory before this lightweight preflight step has
-    even reached the sandbox. This parser scans only the first 2,000 top-level
-    body paragraphs and releases parsed XML immediately.
-    """
-    style_names = _paragraph_style_names(path)
-    samples: list[dict] = []
-    total = 0
-    non_empty = 0
 
+def validate_package(path: str) -> dict:
+    """Bound decompression before inspecting or loading an uploaded document."""
     with zipfile.ZipFile(path) as archive:
-        with archive.open("word/document.xml") as document_file:
-            for _, paragraph in etree.iterparse(document_file, events=("end",), tag=_P):
-                parent = paragraph.getparent()
-                if parent is None or parent.tag != _BODY:
-                    _release_element(paragraph)
-                    continue
+        entries = archive.infolist()
+        total = sum(info.file_size for info in entries)
+        if len(entries) > 10_000 or total > MAX_UNCOMPRESSED_BYTES:
+            raise DocumentTooLarge("Document exceeds the 512 MiB expanded-size limit")
+        if "word/document.xml" not in archive.namelist():
+            raise ValueError("Missing Word document content")
+        return {"expanded_bytes": total, "document_xml_bytes": archive.getinfo("word/document.xml").file_size}
 
-                total += 1
-                text = _paragraph_text(paragraph)
-                if text.strip():
-                    non_empty += 1
-                _append_sample_paragraph(samples, paragraph, text, total - 1, style_names)
 
-                if total >= 2_000:
-                    break
-                _release_element(paragraph)
+def _content_parts(archive):
+    names = archive.namelist()
+    return ["word/document.xml"] + sorted(
+        name for name in names
+        if re.fullmatch(r"word/(?:header|footer)\d+\.xml", name)
+    )
 
+
+def _xml_events(source, events=("end",), tag=None):
+    return etree.iterparse(source, events=events, tag=tag,
+                           resolve_entities=False, no_network=True)
+
+
+def summarize(path: str, instruction: str = "") -> str:
+    """Scan structure in bounded memory; send only a bounded, labelled sample."""
+    sizes = validate_package(path)
+    styles = _paragraph_style_names(path)
+    terms = list(dict.fromkeys(re.findall(r"\w{4,}", instruction.casefold())))[:32]
+    samples, relevant, headings, tables, headers = [], [], [], [], []
+    body_count = non_empty = table_count = 0
+    with zipfile.ZipFile(path) as archive:
+        for part in _content_parts(archive):
+            is_body = part == "word/document.xml"
+            table_stack = []
+            part_count = 0
+            with archive.open(part) as source:
+                for event, element in _xml_events(source, ("start", "end"), tag=_STRUCTURAL_TAGS):
+                    tag = element.tag
+                    if event == "start":
+                        if tag == f"{{{_W}}}tbl":
+                            table_count += int(is_body)
+                            table_stack.append({
+                                "index": table_count - 1 if is_body else None,
+                                "part": part, "rows": 0, "cells": 0, "samples": [],
+                            })
+                        elif table_stack and tag == f"{{{_W}}}tr":
+                            table_stack[-1]["rows"] += 1
+                        elif table_stack and tag == f"{{{_W}}}tc":
+                            table_stack[-1]["cells"] += 1
+                        continue
+                    if tag == _P:
+                        text = _paragraph_text(element)
+                        part_count += 1
+                        location = "tables" if table_stack else ("body" if is_body else "headers_footers")
+                        sample = {
+                            "index": body_count if is_body and not table_stack else part_count - 1,
+                            "part": part, "location": location,
+                            "style": _style_name(element, styles),
+                            "text_preview": text[:300], "text_truncated": len(text) > 300,
+                        }
+                        if table_stack:
+                            sample["table_index"] = table_stack[-1]["index"]
+                            if text.strip() and len(table_stack[-1]["samples"]) < 2:
+                                table_stack[-1]["samples"].append(sample)
+                        elif is_body:
+                            body_count += 1
+                            non_empty += bool(text.strip())
+                            if text.strip() and len(samples) < 30:
+                                samples.append(sample)
+                            if sample["style"].lower().startswith(("heading", "title")) and len(headings) < 30:
+                                headings.append(sample)
+                        elif text.strip() and len(headers) < 12:
+                            headers.append(sample)
+                        folded = text.casefold()
+                        hits = [folded.find(term) for term in terms] if len(relevant) < 20 else []
+                        hits = [position for position in hits if position >= 0]
+                        if hits and len(relevant) < 20:
+                            offset = max(0, min(hits) - 80)
+                            relevant.append({**sample, "text_preview": text[offset:offset + 500],
+                                             "excerpt_offset": offset, "text_truncated": len(text) > 500})
+                        _release_element(element)
+                    elif tag == f"{{{_W}}}tbl":
+                        table = table_stack.pop()
+                        if len(tables) < 20:
+                            tables.append(table)
+                        _release_element(element)
+                    elif tag in {f"{{{_W}}}tr", f"{{{_W}}}tc"}:
+                        _release_element(element)
     return json.dumps({
-        "total_paragraphs": total,
-        "non_empty_paragraphs": non_empty,
-        "sample_paragraphs": samples,
-        # Table dimensions were never needed by script generation and
-        # collecting them required retaining entire table trees. Preserve
-        # the prompt field for compatibility while keeping preflight bounded.
-        "tables": [],
-    }, indent=2)
+        **sizes, "scan_complete": True, "content_is_partial": True,
+        "sampling_note": "Counts cover the document; text excerpts are partial. Omitted text is unknown, not absent. Scripts operate on the complete document.",
+        "total_paragraphs": body_count, "non_empty_paragraphs": non_empty,
+        "total_tables": table_count, "sample_paragraphs": samples,
+        "headings": headings, "tables": tables, "headers_footers": headers,
+        "instruction_matches": relevant,
+    }, ensure_ascii=False)
+
 
 
 def _run_details(run) -> dict | None:
     properties = run.find(_RUN_PROPERTIES)
-    text_element = run.find(_TEXT)
-    text = (text_element.text or "") if text_element is not None else ""
+    text = "".join(
+        (child.text or "") if child.tag == _TEXT else
+        "\t" if child.tag == f"{{{_W}}}tab" else
+        "\n" if child.tag in {f"{{{_W}}}br", f"{{{_W}}}cr"} else ""
+        for child in run
+    )
     if not text:
         return None
 
     return {
         "text": text,
-        "bold": properties is not None and properties.find(f"{{{_W}}}b") is not None,
-        "italic": properties is not None and properties.find(f"{{{_W}}}i") is not None,
-        "underline": properties is not None and properties.find(f"{{{_W}}}u") is not None,
+        "bold": _on_off(properties, "b"),
+        "italic": _on_off(properties, "i"),
+        "underline": _on_off(properties, "u"),
+        "color": _property_value(properties, "color"),
+        "size_pt": float(_property_value(properties, "sz")) / 2 if _property_value(properties, "sz") else None,
+        "properties": _properties(properties),
     }
 
 
-def _paragraph_details(paragraph) -> dict:
+def _property_value(properties, name):
+    child = properties.find(f"{{{_W}}}{name}") if properties is not None else None
+    return child.get(f"{{{_W}}}val") if child is not None else None
+
+
+def _on_off(properties, name):
+    child = properties.find(f"{{{_W}}}{name}") if properties is not None else None
+    return child is not None and child.get(f"{{{_W}}}val", "true") not in {"0", "false", "off", "none"}
+
+
+def _properties(element):
+    if element is None:
+        return None
+    properties = [(node.tag, sorted(node.attrib.items()), node.text) for node in element.iter()]
+    return hashlib.sha256(json.dumps(properties).encode()).hexdigest()
+
+
+def _paragraph_details(paragraph, style_names=None) -> dict:
     runs = [details for run in paragraph.findall(f".//{_RUN}")
             if (details := _run_details(run)) is not None]
-    return {"text": "".join(run["text"] for run in runs), "style": "Normal", "runs": runs}
+    return {"text": "".join(run["text"] for run in runs),
+            "style": _style_name(paragraph, style_names or {}), "runs": runs,
+            "properties": _properties(paragraph.find(_PARAGRAPH_PROPERTIES))}
 
 
 def _iter_paras_fast(docx_path: str):
     """Yield document paragraphs while keeping the XML parser memory-bounded."""
+    styles = _paragraph_style_names(docx_path)
     with zipfile.ZipFile(docx_path) as archive:
-        with archive.open("word/document.xml") as document_file:
-            for _, paragraph in etree.iterparse(document_file, events=("end",), tag=_P):
-                yield _paragraph_details(paragraph)
-                _release_element(paragraph)
+        for part in _content_parts(archive):
+            with archive.open(part) as document_file:
+                for _, element in _xml_events(document_file, tag=_STRUCTURAL_TAGS):
+                    if element.tag == _P:
+                        yield {**_paragraph_details(element, styles), "part": part}
+                    _release_element(element)
 
 
 def _extract_paras_fast(docx_path: str, limit: int) -> list:
@@ -187,7 +270,7 @@ def _preview_entries(original: list, modified: list) -> list:
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             entries.extend(
-                _entry("unchanged", original[i], modified[j])
+                _entry("unchanged" if original[i] == modified[j] else "changed", original[i], modified[j])
                 for i, j in zip(range(i1, i2), range(j1, j2))
             )
             continue
@@ -237,6 +320,8 @@ def compute_diff(original_path: str, modified_path: str) -> dict:
     Keep 50 aligned preview entries for small documents, while the streaming
     pass counts every changed paragraph in larger documents.
     """
+    changed_parts = _changed_parts(original_path, modified_path)
+    package_details = {"package_changed": bool(changed_parts), "changed_parts": changed_parts}
     original_preview = _extract_paras_fast(original_path, _DIFF_PARA_LIMIT)
     modified_preview = _extract_paras_fast(modified_path, _DIFF_PARA_LIMIT)
     preview_entries = _preview_entries(original_preview, modified_preview)
@@ -245,8 +330,49 @@ def compute_diff(original_path: str, modified_path: str) -> dict:
     preview_changed = [entry for entry in preview_entries if entry["status"] != "unchanged"]
     if preview_changed and total <= _DIFF_PARA_LIMIT:
         return {
+            **package_details,
             "total": total,
             "changed": len(preview_changed),
             "entries": preview_entries,
         }
-    return {"total": total, "changed": changed, "entries": stream_examples}
+    return {**package_details, "total": total, "changed": changed, "entries": stream_examples}
+
+
+def _xml_tokens(source):
+    """Compare expanded XML names, attributes and meaningful text, not bytes."""
+    for event, element in _xml_events(source, ("start", "end")):
+        if event == "start":
+            yield event, element.tag, sorted(element.attrib.items())
+        else:
+            text = element.text or ""
+            yield event, element.tag, text if text.strip() or element.tag == _TEXT else ""
+            _release_element(element)
+
+
+def _parts_equal(before, after, name):
+    # Most unchanged parts are byte-identical. For edited XML, stop at the first
+    # structural difference instead of canonicalizing two entire large trees.
+    with before.open(name) as left, after.open(name) as right:
+        while True:
+            a, b = left.read(1024 * 1024), right.read(1024 * 1024)
+            if a != b:
+                break
+            if not a:
+                return True
+    if not name.endswith((".xml", ".rels")):
+        return False
+    sentinel = object()
+    with before.open(name) as left, after.open(name) as right:
+        return all(a == b for a, b in zip_longest(
+            _xml_tokens(left), _xml_tokens(right), fillvalue=sentinel,
+        ))
+
+
+def _changed_parts(original_path, modified_path):
+    validate_package(original_path)
+    validate_package(modified_path)
+    with zipfile.ZipFile(original_path) as before, zipfile.ZipFile(modified_path) as after:
+        names = {name for name in before.namelist() + after.namelist() if name.startswith("word/")}
+        old, new = set(before.namelist()), set(after.namelist())
+        return sorted(name for name in names if name not in old or name not in new
+                      or not _parts_equal(before, after, name))

@@ -81,6 +81,8 @@ jobs:
             chmod 600 ~/lazyfood/nginx/conf.d/certs/sangri.tech.key
 
             docker network create shared-proxy || true
+            docker network inspect docx-engineer-sandbox-net >/dev/null 2>&1 \
+              || docker network create --internal docx-engineer-sandbox-net
 
             printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 

@@ -53,7 +53,10 @@ function renderRuns(runs: Run[]) {
           .filter(Boolean)
           .join(' ')
         return (
-          <span key={i} className={cls || undefined}>
+          <span key={i} className={cls || undefined} style={{
+            color: r.color && /^[0-9a-f]{6}$/i.test(r.color) ? `#${r.color}` : undefined,
+            fontSize: r.size_pt && r.size_pt > 0 ? `${r.size_pt}pt` : undefined,
+          }}>
             {r.text}
           </span>
         )
@@ -65,7 +68,7 @@ function renderRuns(runs: Run[]) {
 function renderPara(para: Paragraph | null) {
   if (!para) return <span style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>—</span>
   if (!para.runs.length) return <span style={{ color: 'var(--text-secondary)' }}>{para.text || '(tuščia pastraipa)'}</span>
-  return renderRuns(para.runs)
+  return <>{para.style !== 'Normal' && <small>{para.style}<br /></small>}{renderRuns(para.runs)}</>
 }
 
 interface Props {

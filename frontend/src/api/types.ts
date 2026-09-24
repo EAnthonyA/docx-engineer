@@ -5,12 +5,15 @@ export interface Run {
   bold: boolean
   italic: boolean
   underline: boolean
+  color?: string | null
+  size_pt?: number | null
 }
 
 export interface Paragraph {
   text: string
   style: string
   runs: Run[]
+  part?: string
 }
 
 export interface DiffEntry {
@@ -23,6 +26,8 @@ export interface Diff {
   total: number
   changed: number
   entries: DiffEntry[]
+  package_changed?: boolean
+  changed_parts?: string[]
 }
 
 export interface Job {

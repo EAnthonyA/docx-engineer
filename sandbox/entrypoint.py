@@ -5,15 +5,18 @@ from pathlib import Path
 
 from docx import Document
 from docxkit import DocxTools
+from document_io import save_document
 
 INPUT_PATH = "/work/in.docx"
 OUTPUT_PATH = "/work/out/out.docx"
 SCRIPT_PATH = "/work/script.py"
 ERROR_PATH = "/work/out/error.txt"
+STAGE_PATH = "/work/out/stage.txt"
 
 
 def main():
     try:
+        Path(STAGE_PATH).write_text("importing_script")
         spec = importlib.util.spec_from_file_location("user_script", SCRIPT_PATH)
         if spec is None or spec.loader is None:
             raise ImportError(f"Cannot load script from {SCRIPT_PATH}")
@@ -25,9 +28,12 @@ def main():
                 "Script must define: def edit(doc, tools) -> None"
             )
 
+        Path(STAGE_PATH).write_text("loading_document")
         doc = Document(INPUT_PATH)
+        Path(STAGE_PATH).write_text("editing_document")
         module.edit(doc, DocxTools())
-        doc.save(OUTPUT_PATH)
+        Path(STAGE_PATH).write_text("saving_document")
+        save_document(doc, OUTPUT_PATH)
 
         if not Path(OUTPUT_PATH).exists():
             raise FileNotFoundError(

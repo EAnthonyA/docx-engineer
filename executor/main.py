@@ -1,8 +1,9 @@
 import os
-import re
+import ast
 import logging
 import time
 from pathlib import Path
+from uuid import UUID
 
 import docker
 from fastapi import FastAPI, HTTPException
@@ -26,33 +27,35 @@ SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "30"))
 SANDBOX_MEMORY = os.environ.get("SANDBOX_MEMORY", "1g")
 SANDBOX_NETWORK = os.environ.get("SANDBOX_NETWORK", "docx-engineer-sandbox-net")
 
-# Defense-in-depth: reject obvious escape hatches before even running the container.
-# The container is the real wall; these checks are secondary.
-_FORBIDDEN = [
-    r"\bos\.system\b",
-    r"\bos\.popen\b",
-    r"\bsubprocess\b",
-    r"\bsocket\b",
-    r"\beval\s*\(",
-    r"\bexec\s*\(",
-    r"\b__import__\s*\(",
-    r"\bopen\s*\(",
-    r"\bimportlib\b",
-    r"__builtins__",
-    r"\bctypes\b",
-    r"\bpickle\b",
-    r"\bmarshal\b",
-]
+# Syntax and contract validation supplement the container isolation boundary.
 
 
 class RunRequest(BaseModel):
-    job_id: str
+    job_id: UUID
 
 
 def _static_check(script: str) -> str | None:
-    for pattern in _FORBIDDEN:
-        if re.search(pattern, script):
-            return f"forbidden pattern: {pattern}"
+    try:
+        tree = ast.parse(script)
+    except SyntaxError as exc:
+        return f"Invalid Python: {exc.msg} (line {exc.lineno})"
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    if len(functions) != 1 or functions[0].name != "edit":
+        return "Define exactly one top-level function: def edit(doc, tools)"
+    args = functions[0].args
+    if [arg.arg for arg in args.posonlyargs + args.args] != ["doc", "tools"] or args.kwonlyargs or args.vararg or args.kwarg:
+        return "Required signature: def edit(doc, tools)"
+    allowed_imports = {"docx", "re", "html", "math", "datetime", "decimal", "collections"}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.Import, ast.ImportFrom)):
+            return "Only imports and the edit function are allowed at module level"
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+            if any(name.split(".")[0] not in allowed_imports for name in names):
+                return "Unsupported import; use the documented tools API"
+        if isinstance(node, ast.Name) and node.id in {"eval", "exec", "open", "compile", "__import__", "__builtins__"}:
+            return f"Forbidden operation: {node.id}"
     return None
 
 
@@ -88,8 +91,8 @@ def _failure_diagnostics(container, exit_code: int, error_file: Path) -> str:
 
 @app.post("/run")
 def run_job(req: RunRequest):
-    job_dir = Path(JOBS_DIR) / req.job_id
-    host_job_dir = Path(HOST_JOBS_DIR) / req.job_id
+    job_dir = Path(JOBS_DIR) / str(req.job_id)
+    host_job_dir = Path(HOST_JOBS_DIR) / str(req.job_id)
     script_path = job_dir / "script.py"
     in_path = job_dir / "in.docx"
     out_dir = job_dir / "out"
@@ -101,16 +104,25 @@ def run_job(req: RunRequest):
 
     violation = _static_check(script_path.read_text())
     if violation:
-        return {"success": False, "error": f"Static check failed ({violation})"}
+        return {"success": False, "error": f"Static check failed ({violation})", "error_kind": "script_error"}
 
     out_dir.mkdir(exist_ok=True)
     os.chmod(out_dir, 0o777)
 
-    client = docker.from_env()
-    _ensure_network(client, SANDBOX_NETWORK)
+    client = None
     container = None
     started_at = time.monotonic()
+    def failure(error, kind):
+        stage_file = out_dir / "stage.txt"
+        try:
+            stage = stage_file.read_text().strip()
+        except OSError:
+            stage = "starting_container"
+        return {"success": False, "error": error, "error_kind": kind, "stage": stage,
+                "duration_ms": round((time.monotonic() - started_at) * 1000)}
     try:
+        client = docker.from_env()
+        _ensure_network(client, SANDBOX_NETWORK)
         log.info(
             "Sandbox starting for job %s (memory=%s timeout=%ds)",
             req.job_id, SANDBOX_MEMORY, SANDBOX_TIMEOUT,
@@ -118,6 +130,7 @@ def run_job(req: RunRequest):
         container = client.containers.create(
             SANDBOX_IMAGE,
             network=SANDBOX_NETWORK,
+            read_only=True,
             tmpfs={"/tmp": "size=64m"},
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
@@ -146,28 +159,36 @@ def run_job(req: RunRequest):
             log.info("Sandbox succeeded for job %s in %dms", req.job_id, duration_ms)
             return {"success": True, "error": None, "duration_ms": duration_ms}
 
-        if exit_code == 137:
+        container.reload()
+        if container.attrs.get("State", {}).get("OOMKilled"):
             error = "OOM: sandbox killed (out of memory). Script must be more memory-efficient: avoid storing large intermediate lists, process paragraphs one at a time without accumulating data."
             log.warning("Sandbox OOM for job %s", req.job_id)
-            return {"success": False, "error": error, "duration_ms": round((time.monotonic() - started_at) * 1000)}
+            return failure(error, "oom")
 
         error_file = out_dir / "error.txt"
         error = _failure_diagnostics(container, exit_code, error_file)
         log.warning("Sandbox failed for job %s (exit %d): %s", req.job_id, exit_code, error)
-        return {"success": False, "error": error, "duration_ms": round((time.monotonic() - started_at) * 1000)}
+        result = failure(error, "script_error")
+        if result["stage"] in {"loading_document", "saving_document"}:
+            result["error_kind"] = "document_error"
+        elif result["stage"] == "starting_container" or exit_code == 137:
+            result["error_kind"] = "executor_error"
+        return result
 
     except Exception as e:
         if "timed out" in str(e).lower() or "ReadTimeout" in type(e).__name__:
             log.warning("Sandbox timeout for job %s (limit %ds)", req.job_id, SANDBOX_TIMEOUT)
-            return {"success": False, "error": f"Timeout: script took longer than {SANDBOX_TIMEOUT}s. Rewrite for performance: avoid nested loops, process paragraphs in a single pass, do not re-parse XML repeatedly.", "duration_ms": round((time.monotonic() - started_at) * 1000)}
+            return failure(f"Timeout: script took longer than {SANDBOX_TIMEOUT}s. Avoid nested loops and repeated XML parsing.", "timeout")
         log.exception("Sandbox run failed for job %s", req.job_id)
-        return {"success": False, "error": f"Executor error: {e}", "duration_ms": round((time.monotonic() - started_at) * 1000)}
+        return failure(f"Executor error: {e}", "executor_error")
     finally:
         if container:
             try:
                 container.remove(force=True)
             except Exception:
                 pass
+        if client:
+            client.close()
 
 
 @app.get("/health")

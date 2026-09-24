@@ -1,393 +1,219 @@
-"""
-docxkit — run-aware helper toolkit for generated document-edit scripts.
-
-All methods are single-pass over the document. The key primitive is
-run-boundary-aware text replacement: python-docx may split a single visual
-word across multiple Run objects, so naive `run.text.replace(...)` silently
-misses matches that span runs. Every method here handles that correctly.
-"""
+"""Document editing helpers that preserve runs, relationships and embedded objects."""
 
 import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from bisect import bisect_left, bisect_right
+from copy import deepcopy
 
-from docx.shared import Pt, RGBColor
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Pt, RGBColor
+from docx.text.paragraph import Paragraph
+from docx.text.run import Run
+
+_TEXT_TAGS = {qn("w:t"), qn("w:tab"), qn("w:br"), qn("w:cr")}
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _para_from_element(doc, el):
-    """Wrap a raw lxml paragraph element in a python-docx Paragraph."""
-    from docx.text.paragraph import Paragraph
-    return Paragraph(el, doc)
+def _runs(para):
+    # Include hyperlinks, but do not edit runs in an embedded text box twice.
+    for element in para._p.iter(qn("w:r")):
+        parent = next(element.iterancestors(qn("w:p")), None)
+        if parent is para._p:
+            yield Run(element, para)
 
 
-def _replace_in_paragraph(para, find_fn):
-    """
-    Run the given find_fn on the concatenated text of para's runs.
-    find_fn(full_text) must return a list of (start, end, replacement) tuples,
-    where [start:end] in full_text should become replacement.
+def _prune_empty_runs(para):
+    # Tag removal leaves empty formatting shells. Release them paragraph by
+    # paragraph so large documents do not retain all deleted tag XML.
+    for run in list(_runs(para)):
+        if all(child.tag == qn("w:rPr") for child in run._r):
+            run._r.getparent().remove(run._r)
 
-    Applies replacements right-to-left (to keep indices valid) by redistributing
-    characters back into the original run sequence — preserving each run's
-    formatting.
 
-    Returns count of replacements made.
-    """
-    runs = para.runs
-    if not runs:
-        return 0
+def _split_run(run, offset):
+    """Keep the left half in place and return the right half, preserving XML."""
+    if offset == 0:
+        return run
+    right = OxmlElement("w:r")
+    right.attrib.update(run._r.attrib)
+    if run._r.rPr is not None:
+        right.append(deepcopy(run._r.rPr))
+    position = 0
+    for child in list(run._r):
+        if child.tag == qn("w:rPr"):
+            continue
+        length = len(child.text or "") if child.tag == qn("w:t") else 0
+        if child.tag in {qn("w:tab"), qn("w:cr")}:
+            length = 1
+        elif child.tag == qn("w:br"):
+            length = 1 if child.get(qn("w:type"), "textWrapping") == "textWrapping" else 0
+        if position >= offset:
+            right.append(child)
+        elif position + length > offset:
+            tail = deepcopy(child)
+            tail.text = (child.text or "")[offset - position:]
+            child.text = (child.text or "")[:offset - position]
+            child.set(qn("xml:space"), "preserve")
+            tail.set(qn("xml:space"), "preserve")
+            right.append(tail)
+        position += length
+    run._r.addnext(right)
+    return Run(right, run._parent)
 
-    # Build run map: character index → (run_index, char_index_within_run)
-    run_starts = []
-    full_text = []
-    for ri, run in enumerate(runs):
-        run_starts.append(len(full_text))
-        full_text.extend(run.text)
-    full_text = "".join(full_text)
-    total = len(full_text)
 
-    matches = find_fn(full_text)
-    if not matches:
-        return 0
+class _TextMap:
+    """One run index per paragraph; edits proceed in descending text order."""
 
-    # Apply right-to-left so earlier indices stay valid
-    matches = sorted(matches, key=lambda m: m[0], reverse=True)
-    new_chars = list(full_text)
-    for start, end, replacement in matches:
-        new_chars[start:end] = list(replacement)
+    def __init__(self, para):
+        self.para = para
+        self.runs, self.starts, self.ends = [], [], []
+        texts = []
+        position = 0
+        for run in _runs(para):
+            text = run.text
+            if not text:
+                continue
+            self.runs.append(run)
+            self.starts.append(position)
+            position += len(text)
+            self.ends.append(position)
+            texts.append(text)
+        self.text = "".join(texts)
 
-    # Re-distribute characters back into runs
-    new_text = "".join(new_chars)
+    def select(self, start, end):
+        if start == end:
+            return []
+        selected = []
+        for index in range(bisect_right(self.ends, start), bisect_left(self.starts, end)):
+            run = self.runs[index]
+            lo = max(start - self.starts[index], 0)
+            hi = min(end, self.ends[index]) - self.starts[index]
+            if hi < len(run.text):
+                _split_run(run, hi)
+            selected.append(_split_run(run, lo))
+        return selected
 
-    if len(runs) == 1:
-        runs[0].text = new_text
-        return len(matches)
-
-    # Compute new lengths proportionally based on original run lengths.
-    # Strategy: keep each run's original char count; the last run absorbs remainder.
-    cursor = 0
-    for ri, run in enumerate(runs):
-        orig_len = len(run.text)  # current (may be stale now) — use run_starts diff
-        if ri + 1 < len(run_starts):
-            orig_len = run_starts[ri + 1] - run_starts[ri]
+    def replace(self, start, end, text):
+        if start == end:
+            if not text:
+                return
+            if not self.runs:
+                self.para.add_run(text)
+                return
+            index = min(bisect_right(self.ends, start), len(self.runs) - 1)
+            anchor = _split_run(self.runs[index], start - self.starts[index])
+            selected = []
         else:
-            orig_len = total - run_starts[ri]
+            selected = self.select(start, end)
+            anchor = selected[0]
+        if text:
+            element = OxmlElement("w:r")
+            if anchor._r.rPr is not None:
+                element.append(deepcopy(anchor._r.rPr))
+            Run(element, self.para).text = text
+            anchor._r.addprevious(element)
+        for run in selected:
+            # Keep drawings, field codes, bookmarks and relationship wrappers.
+            for child in list(run._r):
+                if child.tag in _TEXT_TAGS and not (
+                    child.tag == qn("w:br") and child.get(qn("w:type"), "textWrapping") != "textWrapping"
+                ):
+                    run._r.remove(child)
 
-        if ri < len(runs) - 1:
-            chunk = new_text[cursor:cursor + orig_len]
-            run.text = chunk
-            cursor += orig_len
-        else:
-            run.text = new_text[cursor:]
-
-    return len(matches)
-
-
-def _location_filter(locations):
-    """Return (do_body, do_headers) booleans from locations string."""
-    loc = (locations or "all").lower()
-    do_body = loc in ("all", "body", "tables")
-    do_hf = loc in ("all", "headers_footers")
-    return do_body, do_hf
-
-
-def _parse_color(color):
-    """Hex string 'RRGGBB' or '#RRGGBB' -> RGBColor, or None."""
-    if not color:
-        return None
-    c = color.lstrip("#")
-    return RGBColor(int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
-
-
-# Per-character formatting is tracked as a 5-tuple:
-#   (bold, italic, underline, color_rgb, size)
-_NO_FMT = (None,) * 5
-
-
-def _fmt_at(char_fmts, idx):
-    """Format snapshot for character `idx`, or a neutral tuple if out of range."""
-    return char_fmts[idx] if idx < len(char_fmts) else _NO_FMT
-
-
-def _apply_fmt(run, fmt):
-    """Apply a (bold, italic, underline, color, size) snapshot to a run."""
-    bold, italic, underline, color, size = fmt
-    run.bold = bold
-    run.italic = italic
-    run.underline = underline
-    if color is not None:
-        try:
-            run.font.color.rgb = color
-        except Exception:
-            pass
-    run.font.size = size
-
-
-def _snapshot_char_fmts(runs):
-    """Return (full_text, per-character format list) for a run sequence."""
-    full_text = []
-    char_fmts = []
-    for run in runs:
-        t = run.text
-        full_text.append(t)
-        try:
-            c = run.font.color.rgb
-        except Exception:
-            c = None
-        char_fmts.extend([(run.bold, run.italic, run.underline, c, run.font.size)] * len(t))
-    return "".join(full_text), char_fmts
-
-
-def _build_segments(full_text, matches):
-    """Split full_text into (text, orig_pos, tagged) segments.
-
-    tagged segments are the regex group(1) captures (to be reformatted); the
-    rest is untouched text. Segments cover full_text left to right.
-    """
-    segments = []
-    last_end = 0
-    for m in matches:
-        if m.start() > last_end:
-            segments.append((full_text[last_end:m.start()], last_end, False))
-        segments.append((m.group(1), m.start(1), True))
-        last_end = m.end()
-    if last_end < len(full_text):
-        segments.append((full_text[last_end:], last_end, False))
-    return segments
-
-
-def _clear_runs(para):
-    """Remove every child of the paragraph except its pPr.
-
-    Handles runs wrapped in w:hyperlink / w:ins / w:del, where removing the
-    run element directly would silently fail.
-    """
-    p_el = para._element
-    for child in list(p_el):
-        if child.tag != qn("w:pPr"):
-            p_el.remove(child)
-
-
-def _emit_preserving(para, text, char_fmts, orig_pos):
-    """Add runs for `text`, grouping consecutive same-format chars into one run."""
-    i = 0
-    n = len(text)
-    while i < n:
-        fmt = _fmt_at(char_fmts, orig_pos + i)
-        j = i + 1
-        while j < n and _fmt_at(char_fmts, orig_pos + j) == fmt:
-            j += 1
-        _apply_fmt(para.add_run(text[i:j]), fmt)
-        i = j
-
-
-# ---------------------------------------------------------------------------
-# Public toolkit class
-# ---------------------------------------------------------------------------
 
 class DocxTools:
-    """
-    Helper object passed as `tools` to the generated edit(doc, tools) function.
-
-    All methods operate in-place on the document and return a count of changes.
-    The `doc` parameter is always the python-docx Document instance.
-    """
-
-    # ------------------------------------------------------------------
-    # Text replacement
-    # ------------------------------------------------------------------
-
-    def replace_text(self, doc, old: str, new: str, *, locations: str = "all") -> int:
-        """
-        Replace every literal occurrence of *old* with *new* across all paragraphs,
-        handling matches that span run boundaries.
-
-        locations: "all" | "body" | "tables" | "headers_footers"
-        Returns total replacement count.
-        """
+    def replace_text(self, doc, old: str, new: str, *, locations="all") -> int:
         if not old:
             return 0
+        return self.regex_replace(doc, re.escape(old), lambda _: new, locations=locations)
 
-        def find(text):
-            results = []
-            start = 0
-            while True:
-                idx = text.find(old, start)
-                if idx == -1:
-                    break
-                results.append((idx, idx + len(old), new))
-                start = idx + len(old)
-            return results
-
-        return self._apply_to_paragraphs(doc, find, locations)
-
-    def format_tagged(self, doc, pattern: str, *, flags: int = 0, locations: str = "all",
-                      bold=None, italic=None, underline=None,
-                      color: str = None, size_pt=None) -> int:
-        """
-        Find regex matches of pattern (must have one capture group), strip the full
-        match, keep group(1), and apply the given formatting to the kept content.
-        Run-boundary-aware; preserves original formatting on untouched text.
-
-        Use this whenever you need to remove markup/tags AND format the content inside.
-        Returns total count of replacements.
-        """
+    def regex_replace(self, doc, pattern, repl, *, flags=0, locations="all") -> int:
         compiled = re.compile(pattern, flags)
-        rgb = _parse_color(color)
-        pt = Pt(size_pt) if size_pt is not None else None
         count = 0
-
-        def _process(para):
-            nonlocal count
-            runs = para.runs
-            if not runs:
-                return
-
-            full_text, char_fmts = _snapshot_char_fmts(runs)
-            matches = list(compiled.finditer(full_text))
-            if not matches:
-                return
-
-            _clear_runs(para)
-
-            for text, orig_pos, tagged in _build_segments(full_text, matches):
-                if not text:
-                    continue
-                if tagged:
-                    # Tagged region: merge caller-supplied formatting over the original.
-                    ob, oi, ou, oc, osz = _fmt_at(char_fmts, orig_pos)
-                    _apply_fmt(para.add_run(text), (
-                        bold if bold is not None else ob,
-                        italic if italic is not None else oi,
-                        underline if underline is not None else ou,
-                        rgb if rgb is not None else oc,
-                        pt if pt is not None else osz,
-                    ))
-                else:
-                    _emit_preserving(para, text, char_fmts, orig_pos)
-
-            count += len(matches)
-
         for para in self.iter_paragraphs(doc, locations=locations):
-            _process(para)
+            mapped = _TextMap(para)
+            matches = list(compiled.finditer(mapped.text))
+            # Evaluate callables in document order, just like re.sub.
+            edits = [(m.start(), m.end(), repl(m) if callable(repl) else m.expand(repl))
+                     for m in matches]
+            changed = False
+            for start, end, replacement in reversed(edits):
+                if replacement != mapped.text[start:end]:
+                    mapped.replace(start, end, replacement)
+                    count += 1
+                    changed = True
+            if changed:
+                _prune_empty_runs(para)
         return count
 
-    def regex_replace(self, doc, pattern: str, repl, *, flags: int = 0, locations: str = "all") -> int:
-        """
-        Replace every regex match of *pattern* with *repl* across all paragraphs,
-        handling run-boundary spans.
-
-        repl: str or callable(match) -> str
-        locations: "all" | "body" | "tables" | "headers_footers"
-        Returns total replacement count.
-        """
+    def format_tagged(self, doc, pattern, *, flags=0, locations="all",
+                      bold=None, italic=None, underline=None, color=None, size_pt=None) -> int:
         compiled = re.compile(pattern, flags)
+        if compiled.groups != 1:
+            raise ValueError("format_tagged requires exactly one capture group")
+        count = 0
+        for para in self.iter_paragraphs(doc, locations=locations):
+            mapped = _TextMap(para)
+            matches = list(compiled.finditer(mapped.text))
+            for match in reversed(matches):
+                if match.start(1) < match.start() or match.end(1) > match.end():
+                    raise ValueError("The capture group must participate inside the full match")
+                mapped.replace(match.end(1), match.end(), "")
+                for run in mapped.select(match.start(1), match.end(1)):
+                    self.set_format(run, bold=bold, italic=italic, underline=underline,
+                                    color=color, size_pt=size_pt)
+                mapped.replace(match.start(), match.start(1), "")
+                count += 1
+            if matches:
+                _prune_empty_runs(para)
+        return count
 
-        def find(text):
-            results = []
-            for m in compiled.finditer(text):
-                replacement = repl(m) if callable(repl) else compiled.sub(repl, m.group())
-                results.append((m.start(), m.end(), replacement))
-            return results
-
-        return self._apply_to_paragraphs(doc, find, locations)
-
-    def _apply_to_paragraphs(self, doc, find_fn, locations):
-        return sum(_replace_in_paragraph(para, find_fn)
-                   for para in self.iter_paragraphs(doc, locations=locations))
-
-    # ------------------------------------------------------------------
-    # Paragraph iteration
-    # ------------------------------------------------------------------
-
-    def iter_paragraphs(self, doc, *, locations: str = "all"):
-        """
-        Generator yielding every paragraph in the document.
-        Covers body paragraphs, table cell paragraphs, and header/footer paragraphs.
-
-        locations: "all" | "body" | "tables" | "headers_footers"
-        """
-        do_body, do_hf = _location_filter(locations)
-
-        if do_body:
-            for block in doc.element.body:
-                tag = block.tag.split("}")[-1]
-                if tag == "p":
-                    yield _para_from_element(doc, block)
-                elif tag == "tbl":
-                    for p_el in block.iter(qn("w:p")):
-                        yield _para_from_element(doc, p_el)
-
-        if do_hf:
-            for section in doc.sections:
-                for hf in (
-                    section.header,
-                    section.footer,
-                    section.even_page_header,
-                    section.even_page_footer,
-                    section.first_page_header,
-                    section.first_page_footer,
-                ):
-                    if hf is None:
-                        continue
-                    try:
-                        for para in hf.paragraphs:
-                            yield para
-                    except Exception:
-                        pass
-
-    # ------------------------------------------------------------------
-    # Paragraph deletion
-    # ------------------------------------------------------------------
+    def iter_paragraphs(self, doc, *, locations="all"):
+        """Visit each selected paragraph once, including nested header tables."""
+        if locations not in {"all", "body", "tables", "headers_footers"}:
+            raise ValueError(f"Unknown paragraph location: {locations}")
+        if locations in {"all", "body", "tables"}:
+            for element in doc.element.body.iter(qn("w:p")):
+                in_table = next(element.iterancestors(qn("w:tbl")), None) is not None
+                if locations == "body" and in_table:
+                    continue
+                if locations == "tables" and not in_table:
+                    continue
+                yield Paragraph(element, doc)
+        if locations in {"all", "headers_footers"}:
+            seen = set()
+            # Existing related parts avoid materializing absent headers and
+            # prevent linked sections from applying the same edit repeatedly.
+            for rel in doc.part.rels.values():
+                if rel.is_external or not rel.reltype.endswith(("/header", "/footer")):
+                    continue
+                part = rel.target_part
+                if part.partname in seen:
+                    continue
+                seen.add(part.partname)
+                for element in part.element.iter(qn("w:p")):
+                    yield Paragraph(element, part)
 
     def delete_paragraphs(self, doc, predicate) -> int:
-        """
-        Remove all paragraphs where predicate(paragraph.text) is truthy.
-        Works in body and table cells (headers/footers excluded for safety).
-
-        Returns count of removed paragraphs.
-        """
-        to_remove = []
-        for para in self.iter_paragraphs(doc, locations="body"):
-            try:
-                if predicate(para.text):
-                    to_remove.append(para._element)
-            except Exception:
-                pass
-
-        for el in to_remove:
-            parent = el.getparent()
-            if parent is not None:
-                parent.remove(el)
-
-        return len(to_remove)
-
-    # ------------------------------------------------------------------
-    # Formatting
-    # ------------------------------------------------------------------
+        count = 0
+        paragraphs = iter(self.iter_paragraphs(doc, locations="body"))
+        para = next(paragraphs, None)
+        while para is not None:
+            following = next(paragraphs, None)
+            if predicate(para.text):
+                para._p.getparent().remove(para._p)
+                count += 1
+            para = following
+        return count
 
     def set_format(self, target, *, bold=None, italic=None, underline=None,
-                   color: str = None, size_pt=None) -> None:
-        """
-        Apply run-level formatting to a paragraph or a single run.
-
-        target: python-docx Paragraph or Run
-        color: hex string like "FF0000" (no #) or "RRGGBB"
-        size_pt: font size in points (int or float)
-
-        When target is a Paragraph, applies to every run in the paragraph.
-        """
-        runs = target.runs if hasattr(target, "runs") else [target]
-
-        rgb = _parse_color(color)
-        pt = Pt(size_pt) if size_pt is not None else None
-
+                   color=None, size_pt=None) -> None:
+        runs = _runs(target) if isinstance(target, Paragraph) else [target]
+        rgb = RGBColor.from_string(color.lstrip("#")) if color else None
+        size = Pt(size_pt) if size_pt is not None else None
         for run in runs:
             if bold is not None:
                 run.bold = bold
@@ -397,40 +223,24 @@ class DocxTools:
                 run.underline = underline
             if rgb is not None:
                 run.font.color.rgb = rgb
-            if pt is not None:
-                run.font.size = pt
+            if size is not None:
+                run.font.size = size
 
-    def set_style(self, paragraph, name: str) -> None:
-        """
-        Set the paragraph style by name. No-op if the style doesn't exist.
-        """
+    def set_style(self, paragraph, name) -> None:
         try:
             paragraph.style = name
-        except Exception:
-            pass
+        except KeyError as exc:
+            raise ValueError(f"Paragraph style does not exist: {name}") from exc
 
-    # ------------------------------------------------------------------
-    # Web scraping (proxied through the isolated scraper sidecar)
-    # ------------------------------------------------------------------
-
-    def scrape(self, url: str, *, timeout: float = 30) -> str:
-        """
-        Fetch a web page and return its raw HTML as a string.
-
-        This is the ONLY way a script can access the network. The request goes
-        to a scraper sidecar that blocks private/internal addresses. Returns
-        the raw HTML body; raises RuntimeError with a clear message on failure.
-        """
+    def scrape(self, url, *, timeout=30) -> str:
         base = os.environ.get("SCRAPER_URL", "http://scraper:8000").rstrip("/")
         target = f"{base}/fetch?url={urllib.parse.quote(url, safe='')}"
-        req = urllib.request.Request(
-            target, headers={"User-Agent": "docx-engineer-scraper/1.0"}
-        )
+        req = urllib.request.Request(target, headers={"User-Agent": "docx-engineer-scraper/1.0"})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")[:300]
-            raise RuntimeError(f"Scrape failed with HTTP {e.code}: {detail}") from e
-        except Exception as e:
-            raise RuntimeError(f"Scrape failed: {e}") from e
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"Scrape failed with HTTP {exc.code}: {detail}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Scrape failed: {exc}") from exc
