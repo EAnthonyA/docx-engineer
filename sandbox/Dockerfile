@@ -7,6 +7,7 @@ WORKDIR /work
 
 COPY entrypoint.py /work/entrypoint.py
 COPY docxkit.py /work/docxkit.py
+COPY document_io.py /work/document_io.py
 
 USER appuser
 

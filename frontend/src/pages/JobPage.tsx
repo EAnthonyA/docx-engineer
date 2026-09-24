@@ -186,7 +186,7 @@ export default function JobPage() {
       <div className="page job-page">
         <LoadingSpinner
           message="Tvarkome Jūsų dokumentą…"
-          subtext="Dažniausiai tai užtrunka nuo pusės minutės iki minutės. Šį puslapį galite palikti atidarytą."
+          subtext="Didelių dokumentų apdorojimas gali užtrukti kelias minutes. Šį puslapį galite palikti atidarytą."
           detail={job?.stage_detail ?? 'Ruošiamės pradėti'}
           attempt={job?.attempt || undefined}
           maxAttempts={job?.attempt ? job.max_attempts : undefined}
@@ -265,7 +265,8 @@ export default function JobPage() {
               Iš viso pastraipų: {diff.total} &middot; <strong>Pakeista: {diff.changed}</strong>
             </p>
             <p className="diff-meta">
-              Pirmasis variantas paruoštas. Dešinėje matote, kaip atrodys dokumentas po pakeitimų.
+              Pirmasis variantas paruoštas. Čia rodoma dalinė teksto ir formatavimo pakeitimų peržiūra.
+              Visą maketą, lenteles ir kitus dokumento elementus patikrinkite atsisiųstame Word faile.
               Jei viskas gerai, atsisiųskite failą ir pasirinkite „Baigti ir pašalinti failus“; jei ne, spauskite
               „Reikia dar vieno pakeitimo“.
             </p>
@@ -334,6 +335,9 @@ export default function JobPage() {
           )}
 
           <DiffView diff={diff} />
+          {diff.package_changed && diff.changed === 0 && (
+            <p className="diff-meta">Pakeisti dokumento stiliai, maketas arba kiti elementai, kurių ši teksto peržiūra nerodo. Atsisiųskite dokumentą ir peržiūrėkite pakeitimus.</p>
+          )}
         </div>
       </main>
     </div>

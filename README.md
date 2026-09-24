@@ -2,16 +2,19 @@
 
 Upload a `.docx`, describe the edit in plain language, get back a modified file.
 
-A DeepSeek-powered AI client generates a `python-docx` script. The script runs in a hardened Docker sandbox (no network, no filesystem, all capabilities dropped). You review a before/after diff, then download.
+A DeepSeek-powered AI client generates a `python-docx` script. The script runs in a Docker sandbox with a read-only root filesystem, read-only input/script mounts, a writable output directory, and dropped capabilities. Its internal network provides access to a restricted webpage-fetching sidecar, with no direct internet access. You review a partial before/after preview, then download the full Word file.
 
 ## How it works
 
 1. Upload `.docx` + type instruction ("make all headings bold")
-2. Backend sends doc structure + instruction to the LLM
+2. Backend streams document structure, then sends bounded, labelled excerpts (including tables, headers and instruction matches) + instruction to the LLM
 3. The LLM returns an `edit(doc, tools)` function
-4. Executor runs it in a throwaway container: `--network none`, `--read-only`, `--cap-drop ALL`, `--memory 256m`, `--pids-limit 64`
-5. If the script crashes, the traceback feeds back to the LLM — up to 5 retry attempts
-6. Diff renders paragraph-level changes; download when satisfied
+4. Executor runs it in a throwaway container: internal network, `--read-only`, `--cap-drop ALL`, bounded memory (production default 1500 MiB), `--pids-limit 64`
+5. Script errors feed back to the LLM, up to 5 attempts. Temporary AI requests retry up to 3 times; infrastructure failures stop without rewriting code. An editing-phase timeout/OOM gets at most one repair attempt; loading/saving resource failures stop immediately.
+6. Validation compares Word content and formatting, including changes outside the paragraph preview. Download to review the complete layout, tables, images and styles.
+
+Uploads are limited to 50 MiB compressed and 512 MiB expanded. The expanded-size check limits decompression work; it is not a guarantee that every accepted file fits in sandbox memory. Large files may still need to be split into smaller documents.
+The sandbox streams XML into the output ZIP to avoid allocating a second full document XML buffer while saving.
 
 ## Stack
 
@@ -68,7 +71,7 @@ make test-sandbox
 
 Pushes to `main` build and deploy after the CI checks pass. You can also run
 **Build and deploy to VPS** manually from the `main` branch in GitHub Actions.
-The workflow builds and deploys all four images tagged with that commit's SHA,
+The workflow builds and deploys all five images (including the scraper) tagged with that commit's SHA,
 then checks the backend and the `sangri.tech` route through the shared nginx proxy.
 For a manual Compose command on the VPS, set `IMAGE_TAG` to a commit SHA whose
 images have been built and pushed.

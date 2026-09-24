@@ -24,6 +24,10 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/app:/app/app
+      - ./backend/tests:/app/tests:ro
+      - ./sandbox/docxkit.py:/sandbox/docxkit.py:ro
+      - ./sandbox/document_io.py:/sandbox/document_io.py:ro
+      - ./executor:/executor:ro
       - ./jobs:/jobs
     environment:
       - JOBS_DIR=/jobs
@@ -74,4 +78,3 @@ networks:
   sandbox-net:
     name: ${USER}-docx-engineer-sandbox-net
     internal: true
-

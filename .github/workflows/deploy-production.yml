@@ -27,6 +27,11 @@ jobs:
 
   deploy:
     if: github.ref == 'refs/heads/main'
-    needs: [build-frontend, build-backend, build-executor, build-sandbox]
+    needs: [build-frontend, build-backend, build-executor, build-sandbox, build-scraper]
     uses: ./.github/workflows/deploy-vps.yml
+    secrets: inherit
+
+  build-scraper:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-push-scraper.yml
     secrets: inherit

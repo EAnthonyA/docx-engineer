@@ -6,6 +6,7 @@ completions. Config is read from the environment on every call.
 
 import logging
 import os
+import time
 
 import httpx
 
@@ -30,10 +31,10 @@ def _build_user_prompt(instruction, doc_summary, history, clarifications=None) -
         parts.append(block)
     if history:
         parts.append("\nPREVIOUS ATTEMPTS — learn from these failures:")
-        for i, (script, outcome) in enumerate(history, 1):
-            parts.append(f"\nAttempt {i} script:\n{script}")
-            parts.append(f"Attempt {i} outcome: {outcome}")
-    parts.append("\nWrite the transform function now:")
+        for i, (script, outcome) in enumerate(history[-3:], max(1, len(history) - 2)):
+            parts.append(f"\nAttempt {i} script (bounded excerpt):\n{script[:20000]}")
+            parts.append(f"Attempt {i} outcome: {outcome[:4000]}")
+    parts.append("\nWrite the edit(doc, tools) function now:")
     return "\n".join(parts)
 
 
@@ -81,6 +82,22 @@ def _chat(messages: list[dict], temperature: float = 0.0) -> str:
 
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
+    for attempt in range(3):
+        try:
+            return _request_chat(api_key, model, messages, temperature)
+        except (httpx.TransportError, RetryableResponseError):
+            if attempt == 2:
+                raise
+            log.warning("Temporary LLM request failure; retry %d/2", attempt + 1)
+            time.sleep(2 ** attempt)
+    raise RuntimeError("LLM request attempts exhausted")
+
+
+class RetryableResponseError(RuntimeError):
+    pass
+
+
+def _request_chat(api_key, model, messages, temperature):
     resp = httpx.post(
         f"{_DEEPSEEK_BASE_URL}/chat/completions",
         headers={
@@ -98,11 +115,21 @@ def _chat(messages: list[dict], temperature: float = 0.0) -> str:
 
     if resp.status_code >= 400:
         log.error("DeepSeek API error %d: %s", resp.status_code, resp.text[:1000])
-        raise RuntimeError(
+        error_type = RetryableResponseError if resp.status_code in (408, 429) or resp.status_code >= 500 else RuntimeError
+        raise error_type(
             f"DeepSeek API error {resp.status_code}: {resp.text[:300]}"
         )
 
-    return resp.json()["choices"][0]["message"]["content"]
+    try:
+        choice = resp.json()["choices"][0]
+        content = choice["message"]["content"]
+        if choice.get("finish_reason", "stop") != "stop":
+            raise RetryableResponseError("LLM response did not finish normally; incomplete code was discarded")
+        if not isinstance(content, str) or not content.strip():
+            raise RetryableResponseError("LLM returned empty content")
+        return content
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise RetryableResponseError("LLM returned a malformed response") from exc
 
 
 def _build_clarify_prompt(instruction: str, doc_summary: str, clarifications: list | None) -> str:

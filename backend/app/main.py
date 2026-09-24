@@ -140,7 +140,7 @@ async def create_new_job(
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(400, "Only .docx files accepted")
 
-    content = await file.read()
+    content = await file.read(MAX_FILE_SIZE + 1)
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(413, "File too large (max 50 MB)")
 
@@ -222,10 +222,15 @@ async def refine_job(
     note = req.note.strip()
     if not note:
         raise HTTPException(400, "Refinement note is required")
+    if len(note) > MAX_INSTRUCTION_LEN:
+        raise HTTPException(400, "Refinement note is too long")
+    if not job.input_path or not Path(job.input_path).is_file():
+        raise HTTPException(409, "Document has been archived; upload it again")
 
     if job.last_script:
         job.history.append((job.last_script, f"User feedback: {note}"))
     add_conversation_message(job, "user", note)
+    job.clarifications.append(("Additional editing instruction", note))
 
     job.status = "running"
     job.output_path = None
@@ -260,6 +265,8 @@ async def answer_job(
     answer = req.answer.strip()
     if not answer:
         raise HTTPException(400, "Answer is required")
+    if len(answer) > MAX_INSTRUCTION_LEN:
+        raise HTTPException(400, "Answer is too long")
 
     if job.question:
         job.clarifications.append((job.question, answer))
@@ -333,7 +340,8 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
     # caught by Python, but recovery can still report the interrupted phase.
     save_job(job)
     try:
-        doc_summary = docx_inspect.summarize(job.input_path)
+        context_instruction = "\n".join([job.instruction] + [answer for _, answer in job.clarifications[-10:]])
+        doc_summary = docx_inspect.summarize(job.input_path, context_instruction)
     except Exception as e:
         job.status = "stuck"
         log.exception("Job %s document inspection failed", job_id)
@@ -345,6 +353,8 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
             rss_mb=_process_rss_mb(),
         )
         job.last_error = "Dokumento perskaityti nepavyko. Patikrinkite, ar pasirinktas Word dokumentas, ir bandykite dar kartą."
+        if isinstance(e, docx_inspect.DocumentTooLarge):
+            job.last_error = "Dokumentas per didelis apdoroti: išskleistas turinys viršija 512 MiB. Padalykite dokumentą į mažesnes dalis."
         set_job_stage(job, "failed", "Dokumento perskaityti nepavyko")
         add_conversation_message(job, "assistant", job.last_error)
         save_job(job)
@@ -389,6 +399,7 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
 
 def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None:
     job.attempt_error = None
+    resource_failures = 0
     for _attempt in range(MAX_ATTEMPTS):
         job.attempt = _attempt + 1
         set_job_stage(
@@ -435,17 +446,37 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         if not result["success"]:
             msg = f"Script crashed: {result.get('error', 'unknown')}"
             error_text = str(result.get("error", "unknown")).lower()
-            error_kind = (
+            error_kind = result.get("error_kind") or (
                 "oom" if error_text.startswith("oom:") else
                 "timeout" if error_text.startswith("timeout:") else
                 "sandbox_failure"
             )
             add_diagnostic(
                 job, "sandbox_failed", attempt=job.attempt,
-                error_kind=error_kind, **duration_details,
+                error_kind=error_kind, sandbox_stage=result.get("stage"), **duration_details,
             )
             job.history.append((script, msg))
             job.attempt_error = msg
+            if error_kind in {"oom", "timeout"}:
+                resource_failures += 1
+            terminal = error_kind in {"executor_error", "executor_timeout", "document_error"} or (
+                error_kind in {"oom", "timeout"} and (
+                    result.get("stage") != "editing_document" or resource_failures >= 2
+                )
+            )
+            if terminal:
+                job.status = "stuck"
+                job.last_error = (
+                    "Dokumento apdorojimui neužteko atminties arba laiko. Padalykite dokumentą į mažesnes dalis."
+                    if error_kind in {"oom", "timeout"} else
+                    "Dokumento nepavyko įkelti arba išsaugoti. Patikrinkite failą."
+                    if error_kind == "document_error" else
+                    "Dokumentų vykdymo paslauga nepasiekiama arba neatsakė laiku. Pabandykite vėliau."
+                )
+                set_job_stage(job, "failed", job.last_error)
+                add_conversation_message(job, "assistant", job.last_error)
+                save_job(job)
+                return
             set_job_stage(job, "retrying", f"{job.attempt} bandymas nepavyko; ruošiamas kitas būdas")
             add_conversation_message(job, "assistant", f"{job.attempt} bandymas nepavyko. Ieškojome kito būdo atlikti pakeitimą.")
             save_job(job)
@@ -480,7 +511,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             continue
 
         log.debug("Job %s attempt %d diff: total=%d changed=%d", job_id, _attempt + 1, diff["total"], diff["changed"])
-        if diff["changed"] == 0:
+        if not diff.get("package_changed", diff["changed"] > 0):
             msg = "Script ran but made no changes to the document"
             add_diagnostic(job, "no_changes_detected", attempt=job.attempt)
             job.history.append((script, msg))

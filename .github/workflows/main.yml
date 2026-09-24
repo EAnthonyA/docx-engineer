@@ -32,7 +32,7 @@ jobs:
   lint-test-backend:
     name: Backend Lint & Test
     needs: detect-changes
-    if: needs.detect-changes.outputs.backend == 'true' && vars.SKIP_CI != 'true'
+    if: (needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.sandbox == 'true' || needs.detect-changes.outputs.executor == 'true') && vars.SKIP_CI != 'true'
     uses: ./.github/workflows/lint-test-backend.yml
 
   lint-test-frontend:

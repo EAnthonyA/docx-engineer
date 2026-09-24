@@ -57,12 +57,33 @@ services:
       # serialized by the backend, so only one sandbox may use it at once.
       - SANDBOX_TIMEOUT=${SANDBOX_TIMEOUT:-180}
       - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1500m}
+      - SANDBOX_NETWORK=docx-engineer-sandbox-net
     deploy:
       resources:
         limits:
           memory: 256m
           cpus: "0.5"
 
+  scraper:
+    image: ${DOCKERHUB_USERNAME}/docx-engineer:scraper-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
+    restart: unless-stopped
+    networks:
+      - default
+      - sandbox-net
+    environment:
+      - SCRAPE_MAX_BYTES=${SCRAPE_MAX_BYTES:-1048576}
+      - SCRAPE_TIMEOUT=${SCRAPE_TIMEOUT:-15}
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.5"
+
 networks:
+  sandbox-net:
+    name: docx-engineer-sandbox-net
+    # The executor already creates this internal network on older deployments.
+    # Treat it as external so Compose can attach the scraper without relabeling it.
+    external: true
   shared-proxy:
     external: true
