@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docx-engineer.local/schemas/edit-plan-v1.schema.json",
+  "title": "DOCX Engineer edit plan v1",
+  "description": "Prototype contract: literal replacement or exact <B>…<D> bold formatting in ordinary body paragraphs only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {"oneOf": [{"$ref": "#/$defs/replaceText"}, {"$ref": "#/$defs/formatBTags"}]}
+    }
+  },
+  "$defs": {
+    "replaceText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "locations", "search", "replacement", "match_case"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "type": {"const": "replace_text"},
+        "locations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {"const": "body"}
+        },
+        "search": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "replacement": {"type": "string", "maxLength": 65536},
+        "match_case": {"const": true}
+      }
+    },
+    "formatBTags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "locations", "open_tag", "close_tag", "bold"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "type": {"const": "format_b_tags"},
+        "locations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {"const": "body"}
+        },
+        "open_tag": {"const": "<B>"},
+        "close_tag": {"const": "<D>"},
+        "bold": {"const": true}
+      }
+    }
+  }
+}

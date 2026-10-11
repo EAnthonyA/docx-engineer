@@ -1,8 +1,8 @@
-.PHONY: sandbox build run stop logs test-backend test-sandbox hash-password
+.PHONY: sandbox build run stop logs test-backend test-sandbox rust-test hash-password
 
 # Build the sandbox image (required before running)
 sandbox:
-	docker build -t docx-sandbox ./sandbox
+	docker build -t docx-sandbox -f sandbox/Dockerfile .
 
 # Build all dev images + sandbox
 build: sandbox
@@ -22,6 +22,7 @@ logs:
 test-backend:
 	docker compose exec -T \
 	  -e JOBS_DIR=/tmp/docx-engineer-tests \
+	  -e DOCX_ENGINE_MODE=python \
 	  -e ADMIN_PASSWORD=testpass -e ADMIN_PASSWORD_HASH= \
 	  -e SESSION_SECRET=test-secret \
 	  backend pytest /app/tests -v -p no:cacheprovider
@@ -29,6 +30,10 @@ test-backend:
 # Run the actual edit(doc, tools) contract against a disposable fixture.
 test-sandbox:
 	python3 scripts/smoke_sandbox.py
+
+# Uses the pinned toolchain from rust-docx/rust-toolchain.toml.
+rust-test:
+	cargo test --manifest-path rust-docx/Cargo.toml --locked
 
 # Generate a bcrypt hash for ADMIN_PASSWORD_HASH
 hash-password:

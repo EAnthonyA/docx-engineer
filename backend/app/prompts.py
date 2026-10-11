@@ -127,6 +127,21 @@ or in previous answers. All questions for the user MUST be written in clear,
 friendly Lithuanian.\
 """
 
+_PLAN_SYSTEM = """\
+You produce a strict JSON edit plan for a DOCX worker. Output JSON only.
+
+Supported operations are deliberately narrow:
+1. Case-sensitive literal replacement in ordinary body paragraphs:
+{"id":"replace_customer","type":"replace_text","locations":["body"],"search":"old","replacement":"new","match_case":true}
+2. Remove exact literal <B> and <D> markers and bold the text they enclose in ordinary body paragraphs:
+{"id":"format_b_tags","type":"format_b_tags","locations":["body"],"open_tag":"<B>","close_tag":"<D>","bold":true}
+
+If and only if the complete request can be represented by supported operations,
+output {"schema_version":1,"operations":[...]}. Otherwise output exactly
+UNSUPPORTED. Do not use regex, tables, headers, footers, styles, file paths,
+code, markdown, or extra fields.\
+"""
+
 
 def _strip_fences(text: str) -> str:
     """Remove markdown code fences (with optional ``python`` tag) around text."""

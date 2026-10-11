@@ -1,8 +1,10 @@
 import os
 import ast
+import json
 import logging
 import time
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 import docker
@@ -26,6 +28,7 @@ HOST_JOBS_DIR = os.environ.get("HOST_JOBS_DIR", JOBS_DIR)
 SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "30"))
 SANDBOX_MEMORY = os.environ.get("SANDBOX_MEMORY", "1g")
 SANDBOX_NETWORK = os.environ.get("SANDBOX_NETWORK", "docx-engineer-sandbox-net")
+MAX_PLAN_BYTES = 256 * 1024
 
 # Syntax and contract validation supplement the container isolation boundary.
 # They intentionally prohibit reflection helpers because user scripts run with
@@ -41,6 +44,7 @@ _FORBIDDEN_STRING_ATTRIBUTES = {"__builtins__", "__import__"}
 
 class RunRequest(BaseModel):
     job_id: UUID
+    engine: Literal["python", "rust"] = "python"
 
 
 def _static_check(script: str) -> str | None:
@@ -98,9 +102,26 @@ def _failure_diagnostics(container, exit_code: int, error_file: Path) -> str:
         logs = container.logs(stdout=True, stderr=True).decode(errors="replace").strip()
         if logs:
             details.append(f"container_output={logs[-2000:]}")
-        return "Sandbox exited before it could save a Python traceback (" + "; ".join(details) + ")"
+        return "Sandbox exited before it could save a diagnostic (" + "; ".join(details) + ")"
     except Exception as exc:
-        return f"Sandbox exited before it could save a Python traceback (exit={exit_code}; could not inspect container: {exc})"
+        return f"Sandbox exited before it could save a diagnostic (exit={exit_code}; could not inspect container: {exc})"
+
+
+def _validate_plan_file(plan_path: Path) -> str | None:
+    """Bound the executor input before the Rust worker independently validates it."""
+    try:
+        contents = plan_path.read_bytes()
+    except OSError:
+        return "plan.json cannot be read"
+    if len(contents) > MAX_PLAN_BYTES:
+        return "plan.json exceeds the 256 KiB limit"
+    try:
+        payload = json.loads(contents)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "plan.json is not valid UTF-8 JSON"
+    if not isinstance(payload, dict):
+        return "plan.json must be an object"
+    return None
 
 
 @app.post("/run")
@@ -108,17 +129,24 @@ def run_job(req: RunRequest):
     job_dir = Path(JOBS_DIR) / str(req.job_id)
     host_job_dir = Path(HOST_JOBS_DIR) / str(req.job_id)
     script_path = job_dir / "script.py"
+    plan_path = job_dir / "plan.json"
     in_path = job_dir / "in.docx"
     out_dir = job_dir / "out"
 
-    if not script_path.exists():
-        raise HTTPException(400, f"script.py missing for job {req.job_id}")
     if not in_path.exists():
         raise HTTPException(400, f"in.docx missing for job {req.job_id}")
-
-    violation = _static_check(script_path.read_text())
-    if violation:
-        return {"success": False, "error": f"Static check failed ({violation})", "error_kind": "script_error"}
+    if req.engine == "python":
+        if not script_path.exists():
+            raise HTTPException(400, f"script.py missing for job {req.job_id}")
+        violation = _static_check(script_path.read_text())
+        if violation:
+            return {"success": False, "error": f"Static check failed ({violation})", "error_kind": "script_error"}
+    else:
+        if not plan_path.exists():
+            raise HTTPException(400, f"plan.json missing for job {req.job_id}")
+        violation = _validate_plan_file(plan_path)
+        if violation:
+            return {"success": False, "error": f"Plan validation failed ({violation})", "error_kind": "plan_error"}
 
     out_dir.mkdir(exist_ok=True)
     os.chmod(out_dir, 0o777)
@@ -137,10 +165,19 @@ def run_job(req: RunRequest):
     try:
         client = docker.from_env()
         _ensure_network(client, SANDBOX_NETWORK)
-        log.info(
-            "Sandbox starting for job %s (memory=%s timeout=%ds)",
-            req.job_id, SANDBOX_MEMORY, SANDBOX_TIMEOUT,
-        )
+        log.info("Sandbox starting for job %s (engine=%s memory=%s timeout=%ds)", req.job_id, req.engine, SANDBOX_MEMORY, SANDBOX_TIMEOUT)
+        volumes = {
+            str(host_job_dir / "in.docx"): {"bind": "/work/in.docx", "mode": "ro"},
+            str(host_job_dir / "out"): {"bind": "/work/out", "mode": "rw"},
+        }
+        if req.engine == "python":
+            volumes[str(host_job_dir / "script.py")] = {"bind": "/work/script.py", "mode": "ro"}
+        else:
+            volumes[str(host_job_dir / "plan.json")] = {"bind": "/work/plan.json", "mode": "ro"}
+        command = None if req.engine == "python" else [
+            "/usr/local/bin/docx-engineer-rust", "--input", "/work/in.docx",
+            "--plan", "/work/plan.json", "--output", "/work/out/out.docx",
+        ]
         container = client.containers.create(
             SANDBOX_IMAGE,
             network=SANDBOX_NETWORK,
@@ -151,11 +188,8 @@ def run_job(req: RunRequest):
             mem_limit=SANDBOX_MEMORY,
             nano_cpus=1_000_000_000,
             pids_limit=64,
-            volumes={
-                str(host_job_dir / "in.docx"): {"bind": "/work/in.docx", "mode": "ro"},
-                str(host_job_dir / "out"): {"bind": "/work/out", "mode": "rw"},
-                str(host_job_dir / "script.py"): {"bind": "/work/script.py", "mode": "ro"},
-            },
+            volumes=volumes,
+            command=command,
         )
         container.start()
 
@@ -171,7 +205,7 @@ def run_job(req: RunRequest):
         if exit_code == 0:
             duration_ms = round((time.monotonic() - started_at) * 1000)
             log.info("Sandbox succeeded for job %s in %dms", req.job_id, duration_ms)
-            return {"success": True, "error": None, "duration_ms": duration_ms}
+            return {"success": True, "error": None, "engine": req.engine, "duration_ms": duration_ms}
 
         container.reload()
         if container.attrs.get("State", {}).get("OOMKilled"):
@@ -182,6 +216,10 @@ def run_job(req: RunRequest):
         error_file = out_dir / "error.txt"
         error = _failure_diagnostics(container, exit_code, error_file)
         log.warning("Sandbox failed for job %s (exit %d): %s", req.job_id, exit_code, error)
+        if req.engine == "rust":
+            # The worker reports a bounded transform diagnostic. The backend
+            # may make its single allowed auto-mode fallback decision from it.
+            return failure(error, "rust_error")
         result = failure(error, "script_error")
         if result["stage"] in {"loading_document", "saving_document"}:
             result["error_kind"] = "document_error"

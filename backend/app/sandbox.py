@@ -7,13 +7,15 @@ _EXECUTOR_URL = os.environ.get("EXECUTOR_URL", "http://executor:8001")
 _SANDBOX_TIMEOUT = int(os.environ.get("SANDBOX_TIMEOUT", "180"))
 
 
-def run_script(job_id: str) -> dict:
-    """Ask the executor to run the sandbox for the given job. Returns {success, error}."""
+def run_script(job_id: str, *, engine: str = "python") -> dict:
+    """Ask the executor to run an allowlisted engine for the job."""
+    if engine not in {"python", "rust"}:
+        raise ValueError("Unsupported sandbox engine")
     try:
         with httpx.Client(timeout=_SANDBOX_TIMEOUT + 15) as client:
             for attempt in range(3):
                 try:
-                    resp = client.post(f"{_EXECUTOR_URL}/run", json={"job_id": job_id})
+                    resp = client.post(f"{_EXECUTOR_URL}/run", json={"job_id": job_id, "engine": engine})
                     break
                 except (httpx.ConnectError, httpx.ConnectTimeout):
                     if attempt == 2:

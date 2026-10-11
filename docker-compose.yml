@@ -28,11 +28,13 @@ services:
       - ./sandbox/docxkit.py:/sandbox/docxkit.py:ro
       - ./sandbox/document_io.py:/sandbox/document_io.py:ro
       - ./executor:/executor:ro
+      - ./schemas:/schemas:ro
       - ./jobs:/jobs
     environment:
       - JOBS_DIR=/jobs
       - LOG_LEVEL=DEBUG
       - EXECUTOR_URL=http://executor:8001
+      - DOCX_ENGINE_MODE=${DOCX_ENGINE_MODE:-auto}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - SESSION_SECRET=${SESSION_SECRET:-dev-secret-change-me}
       - CORS_ORIGINS=http://localhost:3000

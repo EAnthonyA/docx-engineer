@@ -18,7 +18,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: sandbox
+          context: .
           file: sandbox/Dockerfile
           push: true
           tags: |

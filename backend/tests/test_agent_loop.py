@@ -45,6 +45,57 @@ def test_successful_edits_finish_on_first_attempt(job, monkeypatch, change):
     assert job.diff["package_changed"] is True
 
 
+def test_auto_mode_runs_a_valid_plan_in_rust(job, monkeypatch):
+    monkeypatch.setenv("DOCX_ENGINE_MODE", "auto")
+    monkeypatch.setattr(main.llm, "generate_plan", lambda *args: """{
+      \"schema_version\": 1,
+      \"operations\": [{
+        \"id\": \"format_b_tags\", \"type\": \"format_b_tags\", \"locations\": [\"body\"],
+        \"open_tag\": \"<B>\", \"close_tag\": \"<D>\", \"bold\": true
+      }]
+    }""")
+    monkeypatch.setattr(main.llm, "generate_script", lambda *args: pytest.fail("Python generation should not run"))
+
+    def sandbox(job_id, *, engine):
+        assert engine == "rust"
+        assert (Path(job.input_path).parent / "plan.json").exists()
+        doc = Document(job.input_path)
+        doc.paragraphs[0].add_run(" changed")
+        doc.save(Path(job.input_path).parent / "out/out.docx")
+        return {"success": True, "engine": "rust"}
+
+    monkeypatch.setattr(main.sandbox, "run_script", sandbox)
+    main._run_agent_loop(job.id, clarify=False)
+    assert job.status == "needs_review"
+    assert any(entry["engine"] == "rust" for entry in job.diagnostics if entry["event"] == "execution_prepared")
+
+
+def test_auto_mode_falls_back_once_from_rust_to_python(job, monkeypatch):
+    monkeypatch.setenv("DOCX_ENGINE_MODE", "auto")
+    monkeypatch.setattr(main.llm, "generate_plan", lambda *args: """{
+      \"schema_version\": 1, \"operations\": [{
+        \"id\": \"format_b_tags\", \"type\": \"format_b_tags\", \"locations\": [\"body\"],
+        \"open_tag\": \"<B>\", \"close_tag\": \"<D>\", \"bold\": true
+      }]
+    }""")
+    monkeypatch.setattr(main.llm, "generate_script", lambda *args: "def edit(doc, tools):\n    pass")
+    calls = []
+
+    def sandbox(job_id, *, engine="python"):
+        calls.append(engine)
+        if engine == "rust":
+            return {"success": False, "error": "unsupported_content", "error_kind": "rust_error"}
+        doc = Document(job.input_path)
+        doc.paragraphs[0].add_run(" changed")
+        doc.save(Path(job.input_path).parent / "out/out.docx")
+        return {"success": True}
+
+    monkeypatch.setattr(main.sandbox, "run_script", sandbox)
+    main._run_agent_loop(job.id, clarify=False)
+    assert calls == ["rust", "python"]
+    assert job.status == "needs_review"
+
+
 @pytest.mark.parametrize("kind,stage,expected_attempts", [
     ("executor_error", "starting_container", 1),
     ("executor_timeout", "unknown", 1),

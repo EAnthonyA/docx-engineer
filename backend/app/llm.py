@@ -12,7 +12,7 @@ import httpx
 
 # prompts.py owns the shared prompt contract (system prompts, fence stripping,
 # clarifications block).
-from .prompts import _CLARIFY_SYSTEM, _SYSTEM_PROMPT, _clarifications_block, _strip_fences
+from .prompts import _CLARIFY_SYSTEM, _PLAN_SYSTEM, _SYSTEM_PROMPT, _clarifications_block, _strip_fences
 
 log = logging.getLogger("llm")
 
@@ -60,6 +60,20 @@ def generate_script(instruction: str, doc_summary: str, history: list, clarifica
     log.debug("DeepSeek response — %d chars", len(script))
     log.debug("DeepSeek script:\n%s", script)
     return script
+
+
+def generate_plan(instruction: str, doc_summary: str, clarifications: list | None = None) -> str | None:
+    """Return a JSON plan candidate, or None when the request is unsupported."""
+    parts = [f"DOCUMENT STRUCTURE:\n{doc_summary}", f"\nUSER INSTRUCTION:\n{instruction}"]
+    block = _clarifications_block(clarifications)
+    if block:
+        parts.append(block)
+    parts.append("\nReturn the JSON plan or UNSUPPORTED:")
+    content = _strip_fences(_chat([
+        {"role": "system", "content": _PLAN_SYSTEM},
+        {"role": "user", "content": "\n".join(parts)},
+    ])).strip()
+    return None if content == "UNSUPPORTED" else content
 
 
 def ask_clarification(instruction: str, doc_summary: str, clarifications: list | None = None) -> str | None:
