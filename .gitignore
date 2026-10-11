@@ -27,3 +27,4 @@ rust-docx/target/
 .idea/
 .vscode/
 *.swp
+.pnpm-store/

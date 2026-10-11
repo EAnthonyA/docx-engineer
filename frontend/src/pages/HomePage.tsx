@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
 import FileDropzone from '../components/FileDropzone'
 
 const EXAMPLES = [
@@ -14,6 +14,33 @@ const EXAMPLES = [
   { label: 'Pašalinti puslapių lūžius', text: 'Pašalinkite visus ranka įterptus puslapių lūžius.' },
   { label: 'Sutvarkyti antraštes', text: 'Visoms pirmojo lygio antraštėms nustatykite 16 pt šriftą.' },
 ]
+
+function startErrorMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return 'Nepavyko susisiekti su serveriu. Patikrinkite interneto ryšį ir bandykite dar kartą.'
+  }
+
+  if (error.status === 401) {
+    return 'Prisijungimo sesija nebegalioja. Prisijunkite iš naujo ir bandykite dar kartą.'
+  }
+  if (error.status === 413) {
+    return 'Dokumentas per didelis. Galima įkelti iki 50 MB dydžio Word dokumentą.'
+  }
+  if (error.status === 400 && error.message === 'Only .docx files accepted') {
+    return 'Pasirinkite Word dokumentą, kurio pavadinimas baigiasi .docx.'
+  }
+  if (error.status === 400 && error.message === 'Instruction is required') {
+    return 'Parašykite, ką norite pakeisti dokumente.'
+  }
+  if (error.status === 400 && error.message === 'Instruction too long (max 10000 characters)') {
+    return 'Aprašymas per ilgas. Galima parašyti iki 10 000 ženklų.'
+  }
+  if (error.status === 400 && error.message === 'There was an error parsing the body') {
+    return 'Serveris negalėjo perskaityti įkeliamo failo. Pasirinkite dokumentą iš naujo ir bandykite dar kartą.'
+  }
+
+  return `Nepavyko pradėti tvarkyti dokumento: ${error.message}`
+}
 
 export default function HomePage() {
   const [file, setFile] = useState<File | null>(null)
@@ -28,9 +55,9 @@ export default function HomePage() {
       qc.invalidateQueries({ queryKey: ['job-history'] })
       navigate(`/jobs/${job.id}`)
     },
-    onError: (e) => {
-      console.error('Nepavyko sukurti dokumento užduoties:', e)
-      setError('Dokumento nepavyko pradėti tvarkyti. Patikrinkite, ar pasirinkote Word dokumentą, ir bandykite dar kartą.')
+    onError: (error) => {
+      console.error('Nepavyko sukurti dokumento užduoties:', error)
+      setError(startErrorMessage(error))
     },
   })
 

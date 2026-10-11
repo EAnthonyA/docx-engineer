@@ -14,7 +14,7 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -41,7 +41,10 @@ log = logging.getLogger("main")
 
 MAX_ATTEMPTS = 5
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-MAX_INSTRUCTION_LEN = 2000
+# Detailed editorial requests often include a before/after example or several
+# exceptions. Keep a bounded request size while allowing a useful real-world
+# instruction rather than rejecting it before a job can start.
+MAX_INSTRUCTION_LEN = 10_000
 ENGINE_MODES = {"python", "auto", "rust"}
 
 # Single-user app: only one job may run at a time. Each job spawns a
@@ -59,6 +62,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_job_creation_rejection(request: Request, call_next):
+    """Leave a safe diagnostic for malformed job requests rejected before the route."""
+    response = await call_next(request)
+    if request.method == "POST" and request.url.path == "/api/jobs" and response.status_code >= 400:
+        log.warning("job_create_rejected status=%d", response.status_code)
+    return response
 
 _origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
@@ -132,6 +144,12 @@ def _job_summary(job: Job) -> dict:
     }
 
 
+def _reject_job_creation(status_code: int, detail: str, **metadata) -> None:
+    """Reject bad input while retaining actionable, document-safe server logs."""
+    log.warning("job_create_rejected status=%d reason=%s metadata=%s", status_code, detail, metadata)
+    raise HTTPException(status_code, detail)
+
+
 @app.post("/api/jobs")
 async def create_new_job(
     background_tasks: BackgroundTasks,
@@ -140,17 +158,22 @@ async def create_new_job(
     instruction: str = Form(...),
 ):
     if not file.filename or not file.filename.lower().endswith(".docx"):
-        raise HTTPException(400, "Only .docx files accepted")
+        extension = Path(file.filename).suffix.lower() if file.filename else ""
+        _reject_job_creation(400, "Only .docx files accepted", filename_extension=extension)
 
     content = await file.read(MAX_FILE_SIZE + 1)
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(413, "File too large (max 50 MB)")
+        _reject_job_creation(413, "File too large (max 50 MB)", input_bytes=len(content))
 
     instruction = instruction.strip()
     if not instruction:
-        raise HTTPException(400, "Instruction is required")
+        _reject_job_creation(400, "Instruction is required", instruction_chars=0)
     if len(instruction) > MAX_INSTRUCTION_LEN:
-        raise HTTPException(400, f"Instruction too long (max {MAX_INSTRUCTION_LEN} characters)")
+        _reject_job_creation(
+            400,
+            f"Instruction too long (max {MAX_INSTRUCTION_LEN} characters)",
+            instruction_chars=len(instruction),
+        )
 
     # Histories intentionally retain messages, not Word documents.  Starting
     # another task retires files from completed or failed tasks.
