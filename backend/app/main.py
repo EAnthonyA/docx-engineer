@@ -550,6 +550,12 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         if not diff.get("package_changed", diff["changed"] > 0):
             msg = "Script ran but made no changes to the document"
             add_diagnostic(job, "no_changes_detected", attempt=job.attempt)
+            if engine == "rust" and engine_mode == "auto" and not rust_fallback_used:
+                rust_fallback_used = True
+                add_diagnostic(job, "rust_fallback_to_python", attempt=job.attempt, reason="no_changes")
+                set_job_stage(job, "retrying", "Rust režimas nepadarė pakeitimų; naudojamas suderinamas režimas")
+                save_job(job)
+                continue
             job.history.append((script, msg))
             job.attempt_error = msg
             set_job_stage(job, "retrying", f"{job.attempt} bandymas nepadarė pakeitimų; ruošiamas kitas būdas")

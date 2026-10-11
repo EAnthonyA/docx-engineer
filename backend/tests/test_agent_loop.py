@@ -96,6 +96,31 @@ def test_auto_mode_falls_back_once_from_rust_to_python(job, monkeypatch):
     assert job.status == "needs_review"
 
 
+def test_auto_mode_falls_back_after_a_no_op_rust_result(job, monkeypatch):
+    monkeypatch.setenv("DOCX_ENGINE_MODE", "auto")
+    monkeypatch.setattr(main.llm, "generate_plan", lambda *args: """{
+      \"schema_version\": 1, \"operations\": [{
+        \"id\": \"format_b_tags\", \"type\": \"format_b_tags\", \"locations\": [\"body\"],
+        \"open_tag\": \"<B>\", \"close_tag\": \"<D>\", \"bold\": true
+      }]
+    }""")
+    monkeypatch.setattr(main.llm, "generate_script", lambda *args: "def edit(doc, tools):\n    pass")
+    calls = []
+
+    def sandbox(job_id, *, engine="python"):
+        calls.append(engine)
+        doc = Document(job.input_path)
+        if engine == "python":
+            doc.paragraphs[0].add_run(" changed")
+        doc.save(Path(job.input_path).parent / "out/out.docx")
+        return {"success": True}
+
+    monkeypatch.setattr(main.sandbox, "run_script", sandbox)
+    main._run_agent_loop(job.id, clarify=False)
+    assert calls == ["rust", "python"]
+    assert job.status == "needs_review"
+
+
 @pytest.mark.parametrize("kind,stage,expected_attempts", [
     ("executor_error", "starting_container", 1),
     ("executor_timeout", "unknown", 1),

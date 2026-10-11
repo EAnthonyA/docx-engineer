@@ -104,10 +104,9 @@ fn transform_paragraph(paragraph: &[u8], plan: &EditPlan) -> Result<(Vec<u8>, Tr
     let mut events = Vec::new();
     let mut segments = Vec::new();
     let mut runs: Vec<Run> = Vec::new();
-    let mut boundaries = Vec::new();
+    let mut boundary_events = Vec::new();
     let mut buffer = Vec::new();
     let mut text_depth = 0usize;
-    let mut text_offset = 0usize;
     let mut active_run: Option<usize> = None;
 
     loop {
@@ -119,7 +118,7 @@ fn transform_paragraph(paragraph: &[u8], plan: &EditPlan) -> Result<(Vec<u8>, Tr
                     return Err("unsupported_content_in_body_paragraph".into());
                 }
                 if BOOKMARKS.iter().any(|name| *name == start.name().as_ref()) {
-                    boundaries.push(text_offset);
+                    boundary_events.push(events.len());
                 }
                 if start.name().as_ref() == TEXT {
                     text_depth += 1;
@@ -142,7 +141,7 @@ fn transform_paragraph(paragraph: &[u8], plan: &EditPlan) -> Result<(Vec<u8>, Tr
                 return Err("unsupported_content_in_body_paragraph".into());
             }
             Event::Empty(empty) if BOOKMARKS.iter().any(|name| *name == empty.name().as_ref()) => {
-                boundaries.push(text_offset);
+                boundary_events.push(events.len());
             }
             Event::End(end) if end.name().as_ref() == TEXT => {
                 text_depth = text_depth.saturating_sub(1);
@@ -157,7 +156,6 @@ fn transform_paragraph(paragraph: &[u8], plan: &EditPlan) -> Result<(Vec<u8>, Tr
             Event::Text(text) if text_depth > 0 => {
                 let raw = std::str::from_utf8(text.as_ref())?;
                 let decoded = unescape(raw)?.into_owned();
-                text_offset += decoded.len();
                 let run_index = active_run;
                 if let Some(index) = run_index {
                     let run = &mut runs[index];
@@ -183,6 +181,7 @@ fn transform_paragraph(paragraph: &[u8], plan: &EditPlan) -> Result<(Vec<u8>, Tr
                 let matches: Vec<_> = original.match_indices(&operation.search).collect();
                 stats.matches += matches.len();
                 for (start, matched) in matches.into_iter().rev() {
+                    let boundaries = boundary_offsets(&segments, &boundary_events);
                     if boundaries.iter().any(|boundary| start < *boundary && *boundary < start + matched.len()) {
                         return Err("replacement_crosses_bookmark_boundary".into());
                     }
@@ -196,6 +195,7 @@ fn transform_paragraph(paragraph: &[u8], plan: &EditPlan) -> Result<(Vec<u8>, Tr
         }
     }
     let pieces = if has_format_b_tags {
+        let boundaries = boundary_offsets(&segments, &boundary_events);
         let (pieces, format_stats) = format_b_tags(&segments, &boundaries)?;
         stats.matches += format_stats.matches;
         stats.modifications += format_stats.modifications;
@@ -207,15 +207,36 @@ fn transform_paragraph(paragraph: &[u8], plan: &EditPlan) -> Result<(Vec<u8>, Tr
     if let Some(pieces) = pieces {
         return render_formatted_paragraph(&events, &runs, &segments, &pieces, paragraph.len()).map(|result| (result, stats));
     }
-    for segment in segments {
-        events[segment.event_index] = Event::Text(BytesText::new(&segment.text).into_owned());
-    }
+    write_replaced_text_events(&mut events, &segments)?;
     let mut result = Vec::with_capacity(paragraph.len());
     let mut writer = Writer::new(&mut result);
     for event in events {
         writer.write_event(event)?;
     }
     Ok((result, stats))
+}
+
+fn boundary_offsets(segments: &[Segment], boundary_events: &[usize]) -> Vec<usize> {
+    boundary_events.iter().map(|boundary| {
+        segments.iter().filter(|segment| segment.event_index < *boundary).map(|segment| segment.text.len()).sum()
+    }).collect()
+}
+
+fn write_replaced_text_events(events: &mut [Event<'static>], segments: &[Segment]) -> Result<(), Box<dyn Error>> {
+    for segment in segments {
+        events[segment.event_index] = Event::Text(BytesText::new(&segment.text).into_owned());
+        let needs_preserve = segment.text.starts_with(char::is_whitespace) || segment.text.ends_with(char::is_whitespace);
+        if !needs_preserve { continue; }
+        let start_index = (0..segment.event_index).rev().find(|index| matches!(&events[*index], Event::Start(start) if start.name().as_ref() == TEXT))
+            .ok_or("text_start_not_found")?;
+        if let Event::Start(start) = &events[start_index] {
+            let mut start = start.clone();
+            let has_space = start.attributes().flatten().any(|attribute| attribute.key.as_ref() == b"xml:space");
+            if !has_space { start.push_attribute(("xml:space", "preserve")); }
+            events[start_index] = Event::Start(start);
+        }
+    }
+    Ok(())
 }
 
 fn format_b_tags(segments: &[Segment], boundaries: &[usize]) -> Result<(Vec<Vec<Piece>>, TransformStats), Box<dyn Error>> {
@@ -327,28 +348,35 @@ fn write_split_run<W: Write>(writer: &mut Writer<W>, events: &[Event<'static>], 
     let text_end = run.text_end.ok_or("formatting_requires_text_end")?;
     let mut rpr_start = None;
     let mut rpr_end = None;
+    let mut rpr_empty = None;
     let mut has_bold = false;
     for event in &events[run.start..=run.end] {
         match event {
             Event::Start(start) if start.name().as_ref() == b"w:rPr" => rpr_start = Some(()),
             Event::End(end) if end.name().as_ref() == b"w:rPr" => rpr_end = Some(()),
-            Event::Empty(empty) if empty.name().as_ref() == b"w:b" => has_bold = true,
-            Event::Start(start) if start.name().as_ref() == b"w:b" => has_bold = true,
+            Event::Empty(empty) if empty.name().as_ref() == b"w:rPr" => rpr_empty = Some(()),
+            Event::Empty(empty) if empty.name().as_ref() == b"w:b" => has_bold = bold_enabled(empty),
+            Event::Start(start) if start.name().as_ref() == b"w:b" => has_bold = bold_enabled(start),
             _ => {}
         }
     }
-    if rpr_start.is_some() != rpr_end.is_some() { return Err("malformed_run_properties".into()); }
+    if rpr_start.is_some() != rpr_end.is_some() || (rpr_empty.is_some() && rpr_start.is_some()) { return Err("malformed_run_properties".into()); }
 
     for (piece_index, piece) in pieces.iter().enumerate() {
         for index in run.start..=run.end {
             match &events[index] {
                 Event::Start(_) if index == run.start => {
                     writer.write_event(events[index].clone())?;
-                    if piece.bold && rpr_start.is_none() {
+                    if piece.bold && rpr_start.is_none() && rpr_empty.is_none() {
                         writer.write_event(Event::Start(quick_xml::events::BytesStart::new("w:rPr")))?;
                         writer.write_event(Event::Empty(quick_xml::events::BytesStart::new("w:b")))?;
                         writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:rPr")))?;
                     }
+                }
+                Event::Empty(empty) if empty.name().as_ref() == b"w:rPr" && piece.bold => {
+                    writer.write_event(Event::Start(quick_xml::events::BytesStart::new("w:rPr")))?;
+                    writer.write_event(Event::Empty(quick_xml::events::BytesStart::new("w:b")))?;
+                    writer.write_event(Event::End(quick_xml::events::BytesEnd::new("w:rPr")))?;
                 }
                 Event::Empty(empty) if piece_index > 0 && empty.name().as_ref() == b"w:lastRenderedPageBreak" => {}
                 Event::Start(start) if index == text_start => {
@@ -371,6 +399,12 @@ fn write_split_run<W: Write>(writer: &mut Writer<W>, events: &[Event<'static>], 
         }
     }
     Ok(())
+}
+
+fn bold_enabled(start: &quick_xml::events::BytesStart<'_>) -> bool {
+    start.attributes().flatten().find(|attribute| attribute.key.as_ref() == b"w:val")
+        .map(|attribute| !matches!(attribute.value.as_ref(), b"0" | b"false" | b"off"))
+        .unwrap_or(true)
 }
 
 fn joined_text(segments: &[Segment]) -> String {
@@ -458,6 +492,25 @@ mod tests {
     }
 
     #[test]
+    fn preserves_boundary_whitespace_from_literal_replacements() {
+        let xml = br#"<w:p xmlns:w="urn:word"><w:r><w:t>X</w:t></w:r></w:p>"#;
+        let (result, _) = transform_paragraph(xml, &plan("X", " X ")).unwrap();
+        let result = String::from_utf8(result).unwrap();
+        assert!(result.contains("xml:space=\"preserve\""));
+        assert!(result.contains("> X </w:t>"));
+    }
+
+    #[test]
+    fn rebases_bookmarks_between_literal_operations() {
+        let xml = br#"<w:p xmlns:w="urn:word"><w:r><w:t>A</w:t></w:r><w:bookmarkStart w:id="1" w:name="keep"/><w:r><w:t>B</w:t></w:r></w:p>"#;
+        let plan = EditPlan { operations: vec![
+            Operation::ReplaceText(ReplaceTextOperation { id: "grow".into(), search: "A".into(), replacement: "LONG".into() }),
+            Operation::ReplaceText(ReplaceTextOperation { id: "cross".into(), search: "LONGB".into(), replacement: "X".into() }),
+        ] };
+        assert!(transform_paragraph(xml, &plan).is_err());
+    }
+
+    #[test]
     fn removes_nested_tags_and_bolds_only_the_enclosed_text() {
         let xml = br#"<w:p xmlns:w="urn:word"><w:r><w:rPr><w:i/></w:rPr><w:t>before &lt;B&gt;bold &lt;B&gt;more&lt;D&gt; text&lt;D&gt; after</w:t></w:r></w:p>"#;
         let (result, stats) = transform_paragraph(xml, &format_plan()).unwrap();
@@ -477,6 +530,21 @@ mod tests {
         let (result, _) = transform_paragraph(xml, &format_plan()).unwrap();
         let result = String::from_utf8(result).unwrap();
         assert_eq!(result.matches("lastRenderedPageBreak").count(), 1);
+        assert!(result.contains("<w:b/>"));
+    }
+
+    #[test]
+    fn expands_empty_run_properties_and_overrides_disabled_bold() {
+        let empty = br#"<w:p xmlns:w="urn:word"><w:r><w:rPr/><w:t>&lt;B&gt;x&lt;D&gt;</w:t></w:r></w:p>"#;
+        let (result, _) = transform_paragraph(empty, &format_plan()).unwrap();
+        let result = String::from_utf8(result).unwrap();
+        assert_eq!(result.matches("<w:rPr").count(), 1);
+        assert!(result.contains("<w:rPr><w:b/></w:rPr>"));
+
+        let disabled = br#"<w:p xmlns:w="urn:word"><w:r><w:rPr><w:b w:val="0"/></w:rPr><w:t>&lt;B&gt;x&lt;D&gt;</w:t></w:r></w:p>"#;
+        let (result, _) = transform_paragraph(disabled, &format_plan()).unwrap();
+        let result = String::from_utf8(result).unwrap();
+        assert!(result.contains("w:val=\"0\""));
         assert!(result.contains("<w:b/>"));
     }
 }
