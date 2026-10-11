@@ -7,6 +7,7 @@ os.environ.setdefault("ADMIN_PASSWORD", "testpass")
 os.environ.setdefault("SESSION_SECRET", "test-secret")
 os.environ.setdefault("JOBS_DIR", "/tmp/docx-engineer-test-jobs")
 
+from app import main  # noqa: E402
 from app.main import app  # noqa: E402
 from app import jobs  # noqa: E402
 
@@ -50,6 +51,31 @@ def test_logout(client):
     assert logout.status_code == 200
     resp = client.get("/api/auth/me")
     assert resp.status_code == 401
+
+
+def test_create_job_accepts_detailed_instruction(client, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path)
+    monkeypatch.setattr(main, "_run_agent_loop", lambda _job_id: None)
+    jobs._jobs.clear()
+
+    assert client.post("/api/auth/login", json={"password": "testpass"}).status_code == 200
+    files = {
+        "file": (
+            "example.docx",
+            b"minimal test document",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    }
+
+    accepted = client.post("/api/jobs", data={"instruction": "x" * 10_000}, files=files)
+    assert accepted.status_code == 200
+
+    rejected = client.post("/api/jobs", data={"instruction": "x" * 10_001}, files=files)
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "Instruction too long (max 10000 characters)"
+    assert "job_create_rejected status=400 reason=Instruction too long" in caplog.text
+    assert "instruction_chars': 10001" in caplog.text
+    jobs._jobs.clear()
 
 
 def test_download_keeps_files_until_job_is_explicitly_completed(client, tmp_path, monkeypatch):
