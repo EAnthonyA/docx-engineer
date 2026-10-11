@@ -18,6 +18,7 @@ frontend/dist/
 
 # Docker volumes
 jobs/
+rust-docx/target/
 
 # macOS
 .DS_Store

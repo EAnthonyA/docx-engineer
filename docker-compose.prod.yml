@@ -26,6 +26,7 @@ services:
     environment:
       - JOBS_DIR=/jobs
       - EXECUTOR_URL=http://executor:8001
+      - DOCX_ENGINE_MODE=${DOCX_ENGINE_MODE:-auto}
       - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
       - SESSION_SECRET=${SESSION_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}

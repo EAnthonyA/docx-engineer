@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "operations": [
+    {
+      "id": "format_b_tags",
+      "type": "format_b_tags",
+      "locations": ["body"],
+      "open_tag": "<B>",
+      "close_tag": "<D>",
+      "bold": true
+    }
+  ]
+}

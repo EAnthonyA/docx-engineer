@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "operations": [
+    {
+      "id": "replace_customer",
+      "type": "replace_text",
+      "locations": ["headers_footers"],
+      "search": "{{customer_name}}",
+      "replacement": "Alice",
+      "match_case": true
+    }
+  ]
+}
