@@ -89,6 +89,17 @@ jobs:
             # Pull sandbox image on VPS so executor can use it
             docker pull "$DOCKERHUB_USERNAME/docx-engineer:sandbox-$IMAGE_TAG"
 
+            # The VPS also runs a host-level `docker image prune -af`. The
+            # sandbox is started only for document edits, so it would otherwise
+            # be considered unused and removed a day after deployment. A
+            # stopped container still references the image, while doing no work
+            # and consuming no runtime resources.
+            docker rm -f docx-engineer-sandbox-image-keeper 2>/dev/null || true
+            docker create --name docx-engineer-sandbox-image-keeper \
+              --label docx-engineer.sandbox-image-keeper=true \
+              --network none --read-only \
+              "$DOCKERHUB_USERNAME/docx-engineer:sandbox-$IMAGE_TAG" true >/dev/null
+
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
             docker exec lazyfood-nginx-prod nginx -t
