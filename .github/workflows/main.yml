@@ -15,6 +15,7 @@ jobs:
       backend: ${{ steps.changes.outputs.backend }}
       executor: ${{ steps.changes.outputs.executor }}
       sandbox: ${{ steps.changes.outputs.sandbox }}
+      rust: ${{ steps.changes.outputs.rust }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,6 +29,7 @@ jobs:
           echo "backend=$(echo "$CHANGED" | grep -q '^backend/' && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "executor=$(echo "$CHANGED" | grep -q '^executor/' && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "sandbox=$(echo "$CHANGED" | grep -q '^sandbox/' && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "rust=$(echo "$CHANGED" | grep -q '^rust-docx/' && echo true || echo false)" >> $GITHUB_OUTPUT
 
   lint-test-backend:
     name: Backend Lint & Test
@@ -41,9 +43,15 @@ jobs:
     if: needs.detect-changes.outputs.frontend == 'true' && vars.SKIP_CI != 'true'
     uses: ./.github/workflows/lint-test-frontend.yml
 
+  test-rust:
+    name: Rust Worker Tests
+    needs: detect-changes
+    if: (needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.sandbox == 'true') && vars.SKIP_CI != 'true'
+    uses: ./.github/workflows/test-rust.yml
+
   deploy:
     name: Build and deploy to VPS
-    needs: [detect-changes, lint-test-backend, lint-test-frontend]
+    needs: [detect-changes, lint-test-backend, lint-test-frontend, test-rust]
     if: |
       always() &&
       github.event_name == 'push' &&
@@ -51,6 +59,7 @@ jobs:
       vars.SKIP_CI != 'true' &&
       needs.detect-changes.result == 'success' &&
       (needs.lint-test-backend.result == 'success' || needs.lint-test-backend.result == 'skipped') &&
-      (needs.lint-test-frontend.result == 'success' || needs.lint-test-frontend.result == 'skipped')
+      (needs.lint-test-frontend.result == 'success' || needs.lint-test-frontend.result == 'skipped') &&
+      (needs.test-rust.result == 'success' || needs.test-rust.result == 'skipped')
     uses: ./.github/workflows/deploy-production.yml
     secrets: inherit

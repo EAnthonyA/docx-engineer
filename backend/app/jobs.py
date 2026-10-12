@@ -93,7 +93,9 @@ def discard_job_documents(job: Job) -> None:
 
     job_dir = JOBS_DIR / job.id
     (job_dir / "in.docx").unlink(missing_ok=True)
+    # Remove generated source and declarative artifacts with the document.
     (job_dir / "script.py").unlink(missing_ok=True)
+    (job_dir / "script.rhai").unlink(missing_ok=True)
     (job_dir / "plan.json").unlink(missing_ok=True)
     shutil.rmtree(job_dir / "out", ignore_errors=True)
 

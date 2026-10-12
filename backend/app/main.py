@@ -35,7 +35,6 @@ from .jobs import (
     set_job_stage,
 )
 from . import docx_inspect, llm, sandbox
-from .edit_plan import PlanValidationError, validate_plan_json
 
 log = logging.getLogger("main")
 
@@ -45,8 +44,6 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 # exceptions. Keep a bounded request size while allowing a useful real-world
 # instruction rather than rejecting it before a job can start.
 MAX_INSTRUCTION_LEN = 10_000
-ENGINE_MODES = {"python", "auto", "rust"}
-
 # Single-user app: only one job may run at a time. Each job spawns a
 # memory-hungry sandbox container, so allowing concurrency risks OOM.
 _job_slot = threading.Semaphore(1)
@@ -425,7 +422,6 @@ def _run_job(job_id: str, job, clarify: bool) -> None:
 def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None:
     job.attempt_error = None
     resource_failures = 0
-    rust_fallback_used = False
     for _attempt in range(MAX_ATTEMPTS):
         job.attempt = _attempt + 1
         set_job_stage(
@@ -436,28 +432,18 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         save_job(job)
         log.info("Job %s stage=generating_script attempt=%d/%d", job_id, job.attempt, MAX_ATTEMPTS)
 
-        engine_mode = os.environ.get("DOCX_ENGINE_MODE", "python").strip().lower()
-        if engine_mode not in ENGINE_MODES:
-            log.warning("Unknown DOCX_ENGINE_MODE=%r; using python", engine_mode)
-            engine_mode = "python"
-        engine = "python"
-        script = ""
+        engine = "rust"
         (job_dir / "plan.json").unlink(missing_ok=True)
+        (job_dir / "script.rhai").unlink(missing_ok=True)
         try:
-            if engine_mode != "python" and not rust_fallback_used:
-                candidate = llm.generate_plan(job.instruction, doc_summary, job.clarifications)
-                if candidate is not None:
-                    try:
-                        validate_plan_json(candidate)
-                    except PlanValidationError as exc:
-                        log.info("Job %s Rust plan rejected locally: %s", job_id, exc.code)
-                    else:
-                        (job_dir / "plan.json").write_text(candidate, encoding="utf-8")
-                        engine = "rust"
-                if engine_mode == "rust" and engine != "rust":
-                    raise RuntimeError("Request is not supported by the Rust document engine")
-            if engine == "python":
-                script = llm.generate_script(job.instruction, doc_summary, job.history, job.clarifications)
+            # The model always produces raw Rhai. The worker converts its
+            # registered tool calls into internal validated edit operations.
+            script = llm.generate_rust_script(job.instruction, doc_summary, job.clarifications)
+            if script is None:
+                raise RuntimeError("Request is not supported by the Rust document engine")
+            if len(script.encode("utf-8")) > 128 * 1024:
+                raise RuntimeError("Generated Rust script exceeds the 128 KiB limit")
+            (job_dir / "script.rhai").write_text(script, encoding="utf-8")
         except Exception as e:
             job.status = "stuck"
             log.exception("Job %s script generation failed", job_id)
@@ -467,15 +453,13 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
             save_job(job)
             return
 
+        # Retain only the active Rhai source during a live job so retries can
+        # be diagnosed; archival removes it together with all job artifacts.
         job.last_script = script or None
+        artifact_path = job_dir / "script.rhai"
         add_diagnostic(job, "execution_prepared", attempt=job.attempt, engine=engine,
-                       artifact_chars=len(script) if engine == "python" else (job_dir / "plan.json").stat().st_size)
+                       artifact="script", artifact_chars=artifact_path.stat().st_size)
         save_job(job)
-        if engine == "python":
-            (job_dir / "script.py").write_text(script, encoding="utf-8")
-        else:
-            (job_dir / "script.py").unlink(missing_ok=True)
-
         # Clear previous output
         out_dir = job_dir / "out"
         shutil.rmtree(out_dir, ignore_errors=True)
@@ -484,7 +468,7 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         set_job_stage(job, "running_sandbox", "Saugiai atliekami pakeitimai dokumente")
         save_job(job)
         log.info("Job %s stage=running_sandbox attempt=%d/%d", job_id, job.attempt, MAX_ATTEMPTS)
-        result = sandbox.run_script(job_id) if engine == "python" else sandbox.run_script(job_id, engine=engine)
+        result = sandbox.run_script(job_id)
         log.info("Job %s sandbox result attempt=%d engine=%s success=%s error=%r",
                   job_id, _attempt + 1, engine, result.get("success"), result.get("error"))
         duration_ms = result.get("duration_ms")
@@ -505,15 +489,6 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
                 job, "sandbox_failed", attempt=job.attempt,
                 error_kind=error_kind, sandbox_stage=result.get("stage"), **duration_details,
             )
-            if engine == "rust" and engine_mode == "auto" and error_kind == "rust_error":
-                # Rust declines unsupported targeted structures rather than
-                # partially editing them. Retry once from the original input
-                # through the existing Python path.
-                rust_fallback_used = True
-                add_diagnostic(job, "rust_fallback_to_python", attempt=job.attempt)
-                set_job_stage(job, "retrying", "Rust režimas šio dokumento pakeitimo nepalaiko; naudojamas suderinamas režimas")
-                save_job(job)
-                continue
             job.history.append((script, msg))
             job.attempt_error = msg
             if error_kind in {"oom", "timeout"}:
@@ -573,12 +548,6 @@ def _agent_loop_inner(job_id: str, job, job_dir: Path, doc_summary: str) -> None
         if not diff.get("package_changed", diff["changed"] > 0):
             msg = "Script ran but made no changes to the document"
             add_diagnostic(job, "no_changes_detected", attempt=job.attempt)
-            if engine == "rust" and engine_mode == "auto" and not rust_fallback_used:
-                rust_fallback_used = True
-                add_diagnostic(job, "rust_fallback_to_python", attempt=job.attempt, reason="no_changes")
-                set_job_stage(job, "retrying", "Rust režimas nepadarė pakeitimų; naudojamas suderinamas režimas")
-                save_job(job)
-                continue
             job.history.append((script, msg))
             job.attempt_error = msg
             set_job_stage(job, "retrying", f"{job.attempt} bandymas nepadarė pakeitimų; ruošiamas kitas būdas")

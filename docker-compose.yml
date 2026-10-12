@@ -25,8 +25,6 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./backend/tests:/app/tests:ro
-      - ./sandbox/docxkit.py:/sandbox/docxkit.py:ro
-      - ./sandbox/document_io.py:/sandbox/document_io.py:ro
       - ./executor:/executor:ro
       - ./schemas:/schemas:ro
       - ./jobs:/jobs
@@ -34,7 +32,6 @@ services:
       - JOBS_DIR=/jobs
       - LOG_LEVEL=DEBUG
       - EXECUTOR_URL=http://executor:8001
-      - DOCX_ENGINE_MODE=${DOCX_ENGINE_MODE:-auto}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - SESSION_SECRET=${SESSION_SECRET:-dev-secret-change-me}
       - CORS_ORIGINS=http://localhost:3000
@@ -58,7 +55,7 @@ services:
       - JOBS_DIR=/jobs
       - HOST_JOBS_DIR=${PWD}/jobs
       - LOG_LEVEL=DEBUG
-      - SANDBOX_IMAGE=docx-sandbox
+      - RUST_SANDBOX_IMAGE=docx-sandbox-rust
       - SANDBOX_TIMEOUT=120
       - SANDBOX_MEMORY=${SANDBOX_MEMORY:-1536m}
       - SANDBOX_NETWORK=${USER}-docx-engineer-sandbox-net

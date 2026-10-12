@@ -26,7 +26,6 @@ services:
     environment:
       - JOBS_DIR=/jobs
       - EXECUTOR_URL=http://executor:8001
-      - DOCX_ENGINE_MODE=${DOCX_ENGINE_MODE:-auto}
       - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
       - SESSION_SECRET=${SESSION_SECRET}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
@@ -53,7 +52,7 @@ services:
     environment:
       - JOBS_DIR=/jobs
       - HOST_JOBS_DIR=${JOBS_HOST_DIR:?Set JOBS_HOST_DIR to an absolute writable host directory}
-      - SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
+      - RUST_SANDBOX_IMAGE=${DOCKERHUB_USERNAME}/docx-engineer:sandbox-rust-${IMAGE_TAG:?Set IMAGE_TAG to the deployment commit SHA}
       # A bounded allowance for long, heavily formatted Word files. Jobs are
       # serialized by the backend, so only one sandbox may use it at once.
       - SANDBOX_TIMEOUT=${SANDBOX_TIMEOUT:-180}
