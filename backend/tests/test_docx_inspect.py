@@ -154,13 +154,11 @@ def test_layout_and_style_definition_changes_count_even_without_text_changes(tmp
 
 
 def test_resaving_without_an_edit_is_not_a_change(tmp_path):
-    from docxkit import DocxTools
     doc = Document()
     doc.add_paragraph("unchanged")
     before, after = tmp_path / "before.docx", tmp_path / "after.docx"
     doc.save(before)
     doc = Document(before)
-    DocxTools().replace_text(doc, "absent", "new")
     doc.save(after)
     assert compute_diff(str(before), str(after))["package_changed"] is False
 

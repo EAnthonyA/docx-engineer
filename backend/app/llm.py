@@ -1,7 +1,7 @@
 """DeepSeek LLM client.
 
-Generates python-docx edit scripts via DeepSeek's OpenAI-compatible chat
-completions. Config is read from the environment on every call.
+Generates raw Rust-hosted Rhai edit scripts via DeepSeek's OpenAI-compatible
+chat completions. Config is read from the environment on every call.
 """
 
 import logging
@@ -12,7 +12,12 @@ import httpx
 
 # prompts.py owns the shared prompt contract (system prompts, fence stripping,
 # clarifications block).
-from .prompts import _CLARIFY_SYSTEM, _PLAN_SYSTEM, _SYSTEM_PROMPT, _clarifications_block, _strip_fences
+from .prompts import (
+    _CLARIFY_SYSTEM,
+    _RHAI_SCRIPT_SYSTEM,
+    _clarifications_block,
+    _strip_fences,
+)
 
 log = logging.getLogger("llm")
 
@@ -21,56 +26,19 @@ _DEEPSEEK_BASE_URL = os.environ.get(
 ).rstrip("/")
 
 
-def _build_user_prompt(instruction, doc_summary, history, clarifications=None) -> str:
-    parts = [
-        f"DOCUMENT STRUCTURE:\n{doc_summary}",
-        f"\nUSER INSTRUCTION:\n{instruction}",
-    ]
-    block = _clarifications_block(clarifications)
-    if block:
-        parts.append(block)
-    if history:
-        parts.append("\nPREVIOUS ATTEMPTS — learn from these failures:")
-        for i, (script, outcome) in enumerate(history[-3:], max(1, len(history) - 2)):
-            parts.append(f"\nAttempt {i} script (bounded excerpt):\n{script[:20000]}")
-            parts.append(f"Attempt {i} outcome: {outcome[:4000]}")
-    parts.append("\nWrite the edit(doc, tools) function now:")
-    return "\n".join(parts)
+def generate_rust_script(instruction: str, doc_summary: str, clarifications: list | None = None) -> str | None:
+    """Return a Rust-hosted Rhai edit script, or None when it is unsupported.
 
-
-def generate_script(instruction: str, doc_summary: str, history: list, clarifications: list | None = None) -> str:
-    """Return raw Python source for the edit script."""
-    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
-    prompt = _build_user_prompt(instruction, doc_summary, history, clarifications)
-
-    log.info(
-        "DeepSeek request — model=%s attempt=%d instruction=%r",
-        model,
-        len(history) + 1,
-        instruction,
-    )
-    log.debug("DeepSeek prompt:\n%s", prompt)
-
-    content = _chat([
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
-    ])
-    script = _strip_fences(content)
-
-    log.debug("DeepSeek response — %d chars", len(script))
-    log.debug("DeepSeek script:\n%s", script)
-    return script
-
-
-def generate_plan(instruction: str, doc_summary: str, clarifications: list | None = None) -> str | None:
-    """Return a JSON plan candidate, or None when the request is unsupported."""
+    The script can express data-dependent control flow but has no ambient I/O;
+    the Rust worker exposes only a small, validated document-edit API.
+    """
     parts = [f"DOCUMENT STRUCTURE:\n{doc_summary}", f"\nUSER INSTRUCTION:\n{instruction}"]
     block = _clarifications_block(clarifications)
     if block:
         parts.append(block)
-    parts.append("\nReturn the JSON plan or UNSUPPORTED:")
+    parts.append("\nReturn the Rhai program or UNSUPPORTED:")
     content = _strip_fences(_chat([
-        {"role": "system", "content": _PLAN_SYSTEM},
+        {"role": "system", "content": _RHAI_SCRIPT_SYSTEM},
         {"role": "user", "content": "\n".join(parts)},
     ])).strip()
     return None if content == "UNSUPPORTED" else content

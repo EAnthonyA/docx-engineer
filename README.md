@@ -2,14 +2,14 @@
 
 Upload a `.docx`, describe the edit in plain language, get back a modified file.
 
-A DeepSeek-powered AI client generates a `python-docx` script. The script runs in a Docker sandbox with a read-only root filesystem, read-only input/script mounts, a writable output directory, and dropped capabilities. Its internal network provides access to a restricted webpage-fetching sidecar, with no direct internet access. You review a partial before/after preview, then download the full Word file.
+A DeepSeek-powered AI client produces raw, bounded Rhai code for the native Rust DOCX worker. The code uses the worker's document-tool API; the worker compiles each tool call into an internal validated operation. The Python-free Docker sandbox has a read-only root filesystem, a read-only input mount, a writable output directory, and dropped capabilities. You review a partial before/after preview, then download the full Word file.
 
 ## How it works
 
 1. Upload `.docx` + type instruction ("make all headings bold")
 2. Backend streams document structure, then sends bounded, labelled excerpts (including tables, headers and instruction matches) + instruction to the LLM
-3. The LLM returns an `edit(doc, tools)` function
-4. Executor runs it in a throwaway container: internal network, `--read-only`, `--cap-drop ALL`, bounded memory (production default 1500 MiB), `--pids-limit 64`
+3. The LLM returns raw Rhai code using the Rust worker's documented edit functions; loops and conditionals are available for custom composition
+4. The worker compiles its tool calls into internal validated operations, then runs them in a throwaway Rust-only container with `--read-only`, `--cap-drop ALL`, bounded memory (production default 1500 MiB), and `--pids-limit 64`
 5. Script errors feed back to the LLM, up to 5 attempts. Temporary AI requests retry up to 3 times; infrastructure failures stop without rewriting code. An editing-phase timeout/OOM gets at most one repair attempt; loading/saving resource failures stop immediately.
 6. Validation compares Word content and formatting, including changes outside the paragraph preview. Download to review the complete layout, tables, images and styles.
 
@@ -23,7 +23,7 @@ The sandbox streams XML into the output ZIP to avoid allocating a second full do
 | Frontend | React + Vite + TypeScript |
 | Backend | FastAPI (Python) |
 | Executor | FastAPI — only service with `docker.sock` |
-| Sandbox | `python:3.12-slim` + `python-docx`, non-root |
+| Sandbox | Native Rust DOCX worker, non-root |
 | AI | DeepSeek (`deepseek-v4-pro`) |
 
 ## Local dev

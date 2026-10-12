@@ -4,7 +4,7 @@
     {
       "id": "replace_customer",
       "type": "replace_text",
-      "locations": ["headers_footers"],
+      "locations": ["body", "tables"],
       "search": "{{customer_name}}",
       "replacement": "Alice",
       "match_case": true

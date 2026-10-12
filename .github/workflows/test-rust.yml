@@ -1,0 +1,13 @@
+name: Test Rust Worker
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Rust worker tests
+        run: docker build --target rust-test -f sandbox/Dockerfile .

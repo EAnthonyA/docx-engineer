@@ -11,61 +11,44 @@ executor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(executor)
 
 
-@pytest.mark.parametrize("script", [
-    "def transform(inp, out): pass", "def edit(doc): pass", "def edit(doc, tools):\n  broken(",
-    "import os\ndef edit(doc, tools): pass", "def edit(doc, tools):\n    open('file')",
-])
-def test_contract_rejects_invalid_scripts(script):
-    assert executor._static_check(script)
-
-
-def test_contract_accepts_safe_imports_and_text_that_mentions_forbidden_words():
-    assert executor._static_check("import re\nfrom docx.shared import Pt\ndef edit(doc, tools):\n    tools.replace_text(doc, 'open(', 'socket')") is None
-
-
-@pytest.mark.parametrize("script", [
-    "import docx\ndef edit(doc, tools):\n    return getattr(docx, '__builtins__')['__import__']('os')",
-    "import docx\ndef edit(doc, tools):\n    return docx.__builtins__",
-    "def edit(doc, tools):\n    return globals()",
-])
-def test_contract_rejects_indirect_builtin_access(script):
-    assert executor._static_check(script)
-
-
 def test_job_id_cannot_escape_job_directory():
     with pytest.raises(ValidationError):
         executor.RunRequest(job_id="../../etc")
 
 
-def test_rust_mode_mounts_only_the_validated_plan(tmp_path, monkeypatch):
+def test_rust_mode_mounts_only_the_generated_rhai_script(tmp_path, monkeypatch):
     job_id = str(uuid4())
     folder = tmp_path / job_id
     folder.mkdir()
     (folder / "in.docx").write_bytes(b"fixture")
-    (folder / "plan.json").write_text('{"schema_version": 1, "operations": []}')
+    (folder / "script.rhai").write_text('replace_text("TODO", "Done", "body");')
     monkeypatch.setattr(executor, "JOBS_DIR", str(tmp_path))
     monkeypatch.setattr(executor, "HOST_JOBS_DIR", str(tmp_path))
+    monkeypatch.setattr(executor, "RUST_SANDBOX_IMAGE", "docx-sandbox-rust-test")
     client = MagicMock()
     container = client.containers.create.return_value
     container.wait.return_value = {"StatusCode": 0}
     container.logs.return_value = b""
     monkeypatch.setattr(executor.docker, "from_env", lambda: client)
 
-    result = executor.run_job(executor.RunRequest(job_id=job_id, engine="rust"))
+    result = executor.run_job(executor.RunRequest(job_id=job_id))
 
     assert result["success"] is True
     assert result["engine"] == "rust"
     kwargs = client.containers.create.call_args.kwargs
-    assert "/work/plan.json" in {mount["bind"] for mount in kwargs["volumes"].values()}
+    assert client.containers.create.call_args.args[0] == "docx-sandbox-rust-test"
+    assert "/work/script.rhai" in {mount["bind"] for mount in kwargs["volumes"].values()}
+    assert "/work/plan.json" not in {mount["bind"] for mount in kwargs["volumes"].values()}
     assert "/work/script.py" not in {mount["bind"] for mount in kwargs["volumes"].values()}
     assert kwargs["command"][:1] == ["/usr/local/bin/docx-engineer-rust"]
+    assert "--script" in kwargs["command"]
 
 
 @pytest.mark.parametrize("failure,stage,expected", [
     ("oom", "loading_document", "oom"), ("timeout", "editing_document", "timeout"),
-    ("script", "editing_document", "script_error"),
-    ("script", "loading_document", "document_error"),
-    ("killed", "editing_document", "executor_error"),
+    ("script", "editing_document", "rust_error"),
+    ("script", "loading_document", "rust_error"),
+    ("killed", "editing_document", "rust_error"),
     ("startup", "starting_container", "executor_error"),
 ])
 def test_executor_reports_phase_and_kind_and_removes_container(tmp_path, monkeypatch, failure, stage, expected):
@@ -73,7 +56,7 @@ def test_executor_reports_phase_and_kind_and_removes_container(tmp_path, monkeyp
     folder = tmp_path / job_id
     folder.mkdir()
     (folder / "in.docx").write_bytes(b"fixture")
-    (folder / "script.py").write_text("def edit(doc, tools): pass")
+    (folder / "script.rhai").write_text('replace_text("TODO", "Done", "body");')
     (folder / "out").mkdir()
     (folder / "out/stage.txt").write_text(stage)
     monkeypatch.setattr(executor, "JOBS_DIR", str(tmp_path))
